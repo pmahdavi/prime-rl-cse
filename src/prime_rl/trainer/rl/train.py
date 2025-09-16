@@ -44,6 +44,7 @@ from prime_rl.trainer.world import get_world
 from prime_rl.utils.monitor import setup_monitor
 from prime_rl.utils.pydantic_config import parse_argv
 from prime_rl.utils.utils import clean_exit, to_col_format
+from prime_rl.trainer.hf_uploader import HuggingFaceUploader
 
 
 @clean_exit
@@ -61,6 +62,12 @@ def train(config: RLTrainerConfig):
     # Setup the monitor
     logger.info(f"Initializing monitor ({config.wandb})")
     monitor = setup_monitor(config.wandb, output_dir=config.output_dir, run_config=config)
+
+    # Setup the HuggingFace uploader
+    hf_uploader = None
+    if config.hf:
+        logger.info(f"Initializing HuggingFace uploader ({config.hf})")
+        hf_uploader = HuggingFaceUploader(config.hf, monitor)
 
     # Set precision
     setup_torch_distributed()
@@ -403,6 +410,11 @@ def train(config: RLTrainerConfig):
         logger.info("Writing final checkpoint")
         ckpt_manager.save(model, [optimizer], scheduler, progress, step=progress.step)
         ckpt_manager.maybe_clean()
+
+    # Upload to HuggingFace Hub
+    if hf_uploader is not None:
+        logger.info("Uploading model to HuggingFace Hub")
+        hf_uploader.upload(model, tokenizer, progress.step)
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
     logger.success("RL trainer finished!")

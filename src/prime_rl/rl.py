@@ -23,6 +23,7 @@ from prime_rl.orchestrator.config import OrchestratorConfig
 from prime_rl.trainer.config import CheckpointConfig as TrainerCheckpointConfig
 from prime_rl.trainer.rl.config import FakeDataLoaderConfig
 from prime_rl.trainer.rl.config import RLTrainerConfig as TrainerConfig
+from prime_rl.trainer.rl.config import HuggingFaceConfig
 from prime_rl.utils.config import WandbMonitorConfig
 from prime_rl.utils.logger import format_message, format_time, set_logger, setup_handlers
 from prime_rl.utils.pydantic_config import BaseSettings, get_temp_toml_file, parse_argv
@@ -157,6 +158,13 @@ class RLConfig(BaseSettings):
         ),
     ] = None
 
+    hf: Annotated[
+        HuggingFaceConfig | None,
+        Field(
+            description="Shared HuggingFace configs. If None, will fallback to the HuggingFace configs specified on submodule configs.",
+        ),
+    ] = None
+
     max_steps: Annotated[
         int | None,
         Field(
@@ -268,6 +276,22 @@ class RLConfig(BaseSettings):
                 self.orchestrator.wandb.offline = self.wandb.offline
 
         validate_shared_wandb_config(self.trainer, self.orchestrator)
+
+        return self
+
+    @model_validator(mode="after")
+    def auto_setup_hf(self):
+        # If specified, automatically use shared HF project for orchestrator and trainer
+        if self.hf:
+            if not self.trainer.hf:
+                self.trainer.hf = HuggingFaceConfig()
+
+            if self.hf.repo_id:
+                self.trainer.hf.repo_id = self.hf.repo_id
+            if self.hf.organization:
+                self.trainer.hf.organization = self.hf.organization
+            if self.hf.private:
+                self.trainer.hf.private = self.hf.private
 
         return self
 

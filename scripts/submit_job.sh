@@ -13,18 +13,17 @@ fi
 TMPFILE=$(mktemp /tmp/pbs_job.XXXXXX)
 cat > "$TMPFILE" << EOF
 #!/bin/tcsh
-#PBS -l ncpus=8
-#PBS -l ngpus=2
+#PBS -l ncpus=48
+#PBS -l ngpus=4
 #PBS -l mem=120gb
 #PBS -l walltime=03:00:00
-#PBS -q workq@e5-cse-cbgpu01.eecscl.psu.edu
 #PBS -N prime
 #PBS -M pxm5426@psu.edu
 #PBS -m bea
 #PBS -o pbs_results/
 #PBS -e pbs_results/
 
-source /home/grads/pxm5426/.tcshrc
+source /scratch/pxm5426/.tcshrc
 cd /scratch/pxm5426/repos/prime-rl
 
 # Run the command

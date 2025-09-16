@@ -53,6 +53,29 @@ class DataLoaderConfig(BaseConfig):
     fake: Annotated[FakeDataLoaderConfig | None, Field(description="Whether to use a fake data loader.")] = None
 
 
+class HuggingFaceConfig(BaseModel):
+    """Configures the HuggingFace Hub submission."""
+
+    repo_id: Annotated[
+        str,
+        Field(
+            description="The name of the repository to create on the HuggingFace Hub.",
+        ),
+    ]
+    organization: Annotated[
+        str | None,
+        Field(
+            description="The organization to create the repository under. If None, it will be created under the user's namespace.",
+        ),
+    ] = None
+    private: Annotated[
+        bool,
+        Field(
+            description="Whether to create a private repository.",
+        ),
+    ] = False
+
+
 class RLTrainerConfig(BaseSettings):
     """Configures the RL trainer"""
 
@@ -120,6 +143,13 @@ class RLTrainerConfig(BaseSettings):
             description="Whether to run in benchmark mode. It will automatically set the maximum number of steps to run to 5 and use fake data.",
         ),
     ] = False
+
+    hf: Annotated[
+        HuggingFaceConfig | None,
+        Field(
+            description="Configures the HuggingFace Hub submission. If None, will not submit to the Hub.",
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def auto_setup_bench(self):
