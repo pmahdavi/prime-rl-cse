@@ -230,7 +230,18 @@ def get_cuda_visible_devices() -> list[int]:
     if cuda_visible is None:
         # Default to all devices if the environment variable is not set
         return list(range(torch.cuda.device_count()))
-    return list(sorted([int(device) for device in cuda_visible.split(",")]))
+    
+    # Split the devices
+    devices = cuda_visible.split(",")
+    
+    # Try to parse as integers first
+    try:
+        return list(sorted([int(device) for device in devices]))
+    except ValueError:
+        # If parsing fails, we likely have UUIDs
+        # In this case, return sequential indices based on the number of devices
+        # The actual CUDA_VISIBLE_DEVICES mapping will be handled by the GPU setup in server.py
+        return list(range(len(devices)))
 
 
 def get_log_dir(output_dir: Path) -> Path:
