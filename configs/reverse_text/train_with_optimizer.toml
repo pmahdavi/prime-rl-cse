@@ -1,0 +1,29 @@
+# Example configuration for training with optimizer state saving to HuggingFace Hub
+
+# Inherit from the base configuration
+[model]
+name = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+
+[optim]
+lr = 3e-6
+
+# Training parameters
+max_steps = 20
+
+# HuggingFace Hub configuration with optimizer saving
+[hf]
+repo_id = "pmahdavi/prime-rl-reverse-text-with-optimizer"
+private = true
+# Options for optimizer_save_mode:
+# - "full": Use FSDP's full state dict gathering (recommended for most cases)
+# - "staged": Use staged gathering for very large models (fallback option)
+# - null/omitted: Don't save optimizer state (default for backward compatibility)
+optimizer_save_mode = "full"
+
+# Note: When using optimizer_save_mode = "full", the system will:
+# 1. Gather all sharded optimizer states to rank 0
+# 2. Save as "optimizer.pt" alongside the model weights
+# 3. Upload to HuggingFace Hub
+#
+# For very large models where "full" causes OOM, try "staged" mode.
+# This mode attempts to gather optimizer states in chunks to reduce memory usage.

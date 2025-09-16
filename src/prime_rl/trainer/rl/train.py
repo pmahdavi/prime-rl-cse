@@ -414,7 +414,7 @@ def train(config: RLTrainerConfig):
     # Upload to HuggingFace Hub
     if hf_uploader is not None:
         logger.info("Uploading model to HuggingFace Hub")
-        hf_uploader.upload(model, tokenizer, progress.step)
+        hf_uploader.upload(model, tokenizer, progress.step, optimizers=[optimizer])
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
     logger.success("RL trainer finished!")

@@ -74,6 +74,12 @@ class HuggingFaceConfig(BaseModel):
             description="Whether to create a private repository.",
         ),
     ] = False
+    optimizer_save_mode: Annotated[
+        str | None,
+        Field(
+            description="How to save optimizer state. Options: 'full' (use FSDP full state dict), 'staged' (gather in chunks), None (don't save).",
+        ),
+    ] = None
 
 
 class RLTrainerConfig(BaseSettings):

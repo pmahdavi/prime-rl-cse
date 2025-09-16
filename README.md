@@ -579,6 +579,46 @@ uv run rl \
 
 You don't need to restart the inference server if started manually, the orchestrator will automatically send the right checkpoint to the inference server when resuming.
 
+### HuggingFace Hub Integration
+
+Our codebase supports uploading trained models to HuggingFace Hub, including the ability to save consolidated (unsharded) optimizer states. This is particularly useful for:
+- Sharing trained models with the community
+- Continuing training from a checkpoint on different hardware
+- Full model reproducibility including optimizer states
+
+To enable HuggingFace Hub uploads, add the following to your configuration:
+
+```toml
+[hf]
+repo_id = "your-username/your-model-name"
+organization = "your-org"  # Optional
+private = true  # Optional, defaults to false
+optimizer_save_mode = "full"  # Optional, see below
+```
+
+#### Optimizer State Saving
+
+The `optimizer_save_mode` option controls how optimizer states are saved:
+- `"full"` (recommended): Uses FSDP's full state dict gathering to consolidate all sharded optimizer states
+- `"staged"`: Gathers optimizer states in chunks (useful for very large models that OOM with "full" mode)
+- `null` or omitted: Don't save optimizer states (default for backward compatibility)
+
+Example configuration with optimizer saving:
+
+```toml
+[hf]
+repo_id = "username/my-model-with-optimizer"
+private = true
+optimizer_save_mode = "full"
+```
+
+When enabled, the system will:
+1. Gather all sharded optimizer states from distributed ranks
+2. Save as `optimizer.pt` alongside model weights
+3. Upload to HuggingFace Hub at the end of training
+
+**Note**: Gathering optimizer states can be memory-intensive. If you encounter OOM errors with `"full"` mode, try `"staged"` mode or ensure sufficient memory is available on rank 0.
+
 ### Benchmarking
 
 We provide a convenient way to benchmark the performance of the inference engine and trainer using the `--bench` flag. It will run each module in isolation for a few steps and log performance statistics to the console and, optionally, W&B.
