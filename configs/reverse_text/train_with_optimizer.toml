@@ -1,14 +1,15 @@
 # Example configuration for training with optimizer state saving to HuggingFace Hub
 
 # Inherit from the base configuration
+
+# Training parameters
+max_steps = 20
+
 [model]
 name = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
 
 [optim]
 lr = 3e-6
-
-# Training parameters
-max_steps = 20
 
 # HuggingFace Hub configuration with optimizer saving
 [hf]
