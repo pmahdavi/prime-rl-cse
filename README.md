@@ -21,7 +21,7 @@ PRIME-RL: Decentralized RL Training at Scale
 **Quick Installation (Recommended)**
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/PrimeIntellect-ai/prime-rl/main/scripts/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/pmahdavi/prime-rl-cse/main/scripts/install.sh | bash
 ```
 
 <details>
@@ -33,8 +33,8 @@ Manual Installation
 1. Clone the repository
 
 ```bash
-git clone git@github.com:PrimeIntellect-ai/prime-rl.git
-cd prime-rl
+git clone git@github.com:pmahdavi/prime-rl-cse.git
+cd prime-rl-cse
 ```
 
 2. Install [uv](https://docs.astral.sh/uv/)
