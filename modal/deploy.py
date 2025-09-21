@@ -52,9 +52,14 @@ prime_rl_image = (
     .run_commands(
         "pip install uv",
     )
-    # Clone the repository - REMOVED: Now done at runtime
+    # Clone the repository
+    .run_commands(
+        "cd /root && git clone https://github.com/pmahdavi/prime-rl-cse.git",
+    )
     # Install dependencies with all extras (including flash-attn)
-    # Note: We'll need to install deps at runtime too since the repo won't exist yet
+    .run_commands(
+        "cd /root/prime-rl-cse && uv sync --all-extras",
+    )
     # Set environment variables for runtime
     .env({
         "HF_HUB_CACHE": "/cache/huggingface",
@@ -99,17 +104,13 @@ def train_prime_rl(
     import subprocess
     import os
     
-    # Clone the latest code from GitHub at runtime
-    print("Cloning latest code from GitHub...")
-    subprocess.run(["rm", "-rf", "/root/prime-rl-cse"], check=False)  # Remove if exists
-    subprocess.run(["git", "clone", "https://github.com/pmahdavi/prime-rl-cse.git", "/root/prime-rl-cse"], check=True)
-    
-    # Install dependencies
-    print("Installing dependencies...")
-    subprocess.run(["cd", "/root/prime-rl-cse", "&&", "uv", "sync", "--all-extras"], shell=True, check=True)
-    
-    # Change to the repository directory
+    # Update to the latest code from GitHub at runtime
+    print("Updating to latest code from GitHub...")
     os.chdir("/root/prime-rl-cse")
+    subprocess.run(["git", "fetch", "origin"], check=True)
+    subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+    
+    # Dependencies are already installed in the Docker image
     
     # Setup output directory
     output_dir = f"/outputs/{experiment_name}"
@@ -202,16 +203,13 @@ def distributed_trainer_node(
     import os
     import uuid
     
-    # Clone the latest code from GitHub at runtime
-    print(f"Node {node_rank}: Cloning latest code from GitHub...")
-    subprocess.run(["rm", "-rf", "/root/prime-rl-cse"], check=False)  # Remove if exists
-    subprocess.run(["git", "clone", "https://github.com/pmahdavi/prime-rl-cse.git", "/root/prime-rl-cse"], check=True)
-    
-    # Install dependencies
-    print(f"Node {node_rank}: Installing dependencies...")
-    subprocess.run(["cd", "/root/prime-rl-cse", "&&", "uv", "sync", "--all-extras"], shell=True, check=True)
-    
+    # Update to the latest code from GitHub at runtime
+    print(f"Node {node_rank}: Updating to latest code from GitHub...")
     os.chdir("/root/prime-rl-cse")
+    subprocess.run(["git", "fetch", "origin"], check=True)
+    subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+    
+    # Dependencies are already installed in the Docker image
     
     # Setup distributed training environment
     env = os.environ.copy()
