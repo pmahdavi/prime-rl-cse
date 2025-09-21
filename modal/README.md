@@ -92,14 +92,6 @@ modal volume list prime-rl-outputs
 modal volume get prime-rl-outputs experiment-name ./outputs/experiment-name
 ```
 
-## 💰 Cost Optimization
-
-- **T4**: ~$0.59/hour (good for small models)
-- **L4**: ~$1.06/hour (good balance)
-- **A10G**: ~$1.10/hour (cost-effective)
-- **A100-40GB**: ~$3.70/hour (best for large models)
-- **H100**: ~$8.60/hour (maximum performance)
-
 ## 🔧 Advanced Usage
 
 ### Custom GPU Types
