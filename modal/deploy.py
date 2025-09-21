@@ -52,14 +52,9 @@ prime_rl_image = (
     .run_commands(
         "pip install uv",
     )
-    # Clone the repository
-    .run_commands(
-        "cd /root && git clone https://github.com/pmahdavi/prime-rl-cse.git",
-    )
+    # Clone the repository - REMOVED: Now done at runtime
     # Install dependencies with all extras (including flash-attn)
-    .run_commands(
-        "cd /root/prime-rl-cse && uv sync --all-extras",
-    )
+    # Note: We'll need to install deps at runtime too since the repo won't exist yet
     # Set environment variables for runtime
     .env({
         "HF_HUB_CACHE": "/cache/huggingface",
@@ -103,6 +98,15 @@ def train_prime_rl(
     """
     import subprocess
     import os
+    
+    # Clone the latest code from GitHub at runtime
+    print("Cloning latest code from GitHub...")
+    subprocess.run(["rm", "-rf", "/root/prime-rl-cse"], check=False)  # Remove if exists
+    subprocess.run(["git", "clone", "https://github.com/pmahdavi/prime-rl-cse.git", "/root/prime-rl-cse"], check=True)
+    
+    # Install dependencies
+    print("Installing dependencies...")
+    subprocess.run(["cd", "/root/prime-rl-cse", "&&", "uv", "sync", "--all-extras"], shell=True, check=True)
     
     # Change to the repository directory
     os.chdir("/root/prime-rl-cse")
@@ -197,6 +201,15 @@ def distributed_trainer_node(
     import subprocess
     import os
     import uuid
+    
+    # Clone the latest code from GitHub at runtime
+    print(f"Node {node_rank}: Cloning latest code from GitHub...")
+    subprocess.run(["rm", "-rf", "/root/prime-rl-cse"], check=False)  # Remove if exists
+    subprocess.run(["git", "clone", "https://github.com/pmahdavi/prime-rl-cse.git", "/root/prime-rl-cse"], check=True)
+    
+    # Install dependencies
+    print(f"Node {node_rank}: Installing dependencies...")
+    subprocess.run(["cd", "/root/prime-rl-cse", "&&", "uv", "sync", "--all-extras"], shell=True, check=True)
     
     os.chdir("/root/prime-rl-cse")
     
