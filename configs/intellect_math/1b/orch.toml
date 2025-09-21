@@ -1,8 +1,8 @@
-max_steps = 1000
-batch_size = 2048
-micro_batch_size = 1
+max_steps = 500
+batch_size = 1024
+micro_batch_size = 4
 seq_len = 8192
-rollouts_per_example = 16
+rollouts_per_example = 8
 mask_truncated_completions = false
 
 [model]
@@ -25,8 +25,8 @@ max_solve_rate = 0.9
 interval = 50
 
 [eval]
-interval = 50
-environment_ids = ["math500", "aime2024", "aime2025"]
-rollouts_per_example = [1, 16, 16]
+interval = 500
+environment_ids = ["math500", "aime2025"]
+rollouts_per_example = [1, 8]
 
 [ckpt]
