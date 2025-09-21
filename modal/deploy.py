@@ -74,7 +74,7 @@ prime_rl_image = (
 
 @app.function(
     image=prime_rl_image,
-    gpu="A100-40GB:8",  # Default: 8 GPUs, will be overridden by with_options
+    gpu="H100:8",  # Updated to use 8 H100 GPUs as requested
     cpu=16.0,  # 16 CPU cores
     memory=65536,  # 64GB RAM
     volumes={
@@ -114,13 +114,15 @@ def train_prime_rl(
     os.makedirs(output_dir, exist_ok=True)
     
     # Build the command
+    # Generate GPU ID lists based on the counts
+    trainer_gpu_ids = list(range(trainer_gpus))  # e.g., [0, 1] for trainer_gpus=2
+    inference_gpu_ids = list(range(trainer_gpus, trainer_gpus + inference_gpus))  # e.g., [2, 3, 4, 5, 6, 7]
+    
     cmd = [
         "uv", "run", "rl",
         "--trainer", "@", trainer_config,
         "--orchestrator", "@", orchestrator_config,
         "--inference", "@", inference_config,
-        "--trainer-gpus", str(trainer_gpus),
-        "--inference-gpus", str(inference_gpus),
         "--output-dir", output_dir,
     ]
     
@@ -134,6 +136,14 @@ def train_prime_rl(
         cmd.extend(["--wandb.project", wandb_project])
         if wandb_name:
             cmd.extend(["--wandb.name", wandb_name])
+    
+    # Add GPU IDs at the end (they appear to be processed last in the argument parser)
+    # Using comma-separated format for list arguments
+    if trainer_gpu_ids:
+        cmd.extend(["--trainer-gpu-ids", ",".join(str(gpu_id) for gpu_id in trainer_gpu_ids)])
+    
+    if inference_gpu_ids:
+        cmd.extend(["--inference-gpu-ids", ",".join(str(gpu_id) for gpu_id in inference_gpu_ids)])
     
     print("="*60)
     print("Starting prime-rl training on Modal")
@@ -305,7 +315,7 @@ def main(
     
     # Configure the function with the right GPU
     gpu_spec = f"{gpu_type}:{gpu_count}"
-    train_fn = train_prime_rl.with_options(gpu=gpu_spec)
+    # train_fn = train_prime_rl.with_options(gpu=gpu_spec)  # This method doesn't exist in current Modal version
     
     print(f"  - Estimated time: varies by experiment")
     print(f"  - Estimated cost: ~${gpu_count * 3.70:.2f}/hour (A100 pricing)")
@@ -315,7 +325,9 @@ def main(
     print("\n📦 Starting training on Modal...")
     print("(This may take a few minutes to build the container on first run)")
     
-    result = train_fn.remote(
+    # Note: GPU configuration will use the default specified in the @app.function decorator
+    # To use custom GPU settings, you'll need to modify the decorator in train_prime_rl function
+    result = train_prime_rl.remote(
         experiment_name=experiment_name,
         trainer_config=trainer_config,
         orchestrator_config=orchestrator_config,

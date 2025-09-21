@@ -8,4 +8,14 @@ name = "willcb/DeepSeek-R1-Distill-Qwen-1.5B"
 [optim]
 lr = 1e-6
 
+# HuggingFace Hub configuration with optimizer saving
+[hf]
+repo_id = "pmahdavi/qwen_r1_distill_1.5b_intellect-math"
+private = true
+# Options for optimizer_save_mode:
+# - "full": Use FSDP's full state dict gathering (recommended for most cases)
+# - "staged": Use staged gathering for very large models (fallback option)
+# - null/omitted: Don't save optimizer state (default for backward compatibility)
+optimizer_save_mode = "full"
+
 [ckpt]
