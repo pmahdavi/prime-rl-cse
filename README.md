@@ -319,6 +319,34 @@ CUDA_VISIBLE_DEVICES=2,3 uv run rl \
   --output-dir outputs2
 ```
 
+## Modal Deployment
+
+We support running prime-rl on [Modal](https://modal.com), a serverless GPU platform. This is ideal for:
+- Running experiments without managing infrastructure
+- Scaling to multiple GPUs without cluster setup
+- Cost-effective training (pay only for GPU time used)
+
+### Quick Start
+
+```bash
+# Install Modal
+pip install modal
+modal setup  # One-time authentication
+
+# Run a simple experiment
+modal run modal/deploy.py
+
+# Run with custom configuration
+modal run modal/deploy.py \
+  --trainer-config configs/hendrycks_math/1b/train.toml \
+  --orchestrator-config configs/hendrycks_math/1b/orch.toml \
+  --inference-config configs/hendrycks_math/1b/infer.toml \
+  --gpu-count 8 \
+  --trainer-gpu-ratio 0.25
+```
+
+See the [Modal deployment guide](modal/README.md) for detailed documentation and examples.
+
 ## SFT
 
 We have built-in support for SFT using the `sft` entrypoint. SFT often proves useful prior to RL training to get the model in-distribution and have higher initial reward that it can hillclimb from. 
