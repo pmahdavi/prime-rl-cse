@@ -117,6 +117,21 @@ class InferenceConfig(BaseSettings):
         ),
     ] = None
 
+    # Scheduler/throughput tuning (forwarded to vLLM CLI)
+    enable_chunked_prefill: Annotated[
+        bool,
+        Field(
+            description="Enable chunked prefill in vLLM scheduler. Passed to vLLM as `--enable-chunked-prefill`",
+        ),
+    ] = False
+
+    max_num_batched_tokens: Annotated[
+        int | None,
+        Field(
+            description="Maximum number of tokens batched together by scheduler. Passed to vLLM as `--max-num-batched-tokens`",
+        ),
+    ] = None
+
     def to_vllm(self) -> Namespace:
         """Convert InferenceConfig to vLLM-compatible Namespace."""
         namespace = Namespace()
@@ -133,6 +148,8 @@ class InferenceConfig(BaseSettings):
             "parallel.tp": "tensor_parallel_size",
             "parallel.dp": "data_parallel_size",
             "gpu_memory_utilization": "gpu_memory_utilization",
+            "enable_chunked_prefill": "enable_chunked_prefill",
+            "max_num_batched_tokens": "max_num_batched_tokens",
         }
 
         for key in get_all_fields(self):

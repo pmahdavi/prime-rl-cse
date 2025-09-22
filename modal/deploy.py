@@ -150,6 +150,9 @@ def train_prime_rl(
     if inference_gpu_ids:
         cmd.extend(["--inference-gpu-ids", ",".join(str(gpu_id) for gpu_id in inference_gpu_ids)])
     
+    # Set scheduler tuning via typed inference config (no env indirection)
+    # Users can override in the TOML; we supply nothing extra here.
+
     print("="*60)
     print("Starting prime-rl training on Modal")
     print("="*60)
