@@ -403,6 +403,15 @@ def cleanup_processes(processes: list[Popen]):
                 process.kill()
 
 
+def cleanup_log_files(log_files: list):
+    """Close all log file handles"""
+    for log_file in log_files:
+        try:
+            log_file.close()
+        except Exception:
+            pass  # Ignore errors when closing log files
+
+
 def monitor_process(process: Popen, stop_event: Event, error_queue: list, process_name: str):
     """Monitor a subprocess and signal errors via shared queue"""
     try:
@@ -505,6 +514,7 @@ def rl(config: RLConfig):
     monitor_threads: list[Thread] = []
     error_queue: list[Exception] = []
     stop_events: dict[str, Event] = {}
+    log_files: list = []  # Track log file handles for cleanup
 
     try:
         # Optionally, start inference process
@@ -516,14 +526,16 @@ def rl(config: RLConfig):
             inference_cmd = ["uv", "run", "inference", "@", inference_file.as_posix()]
             logger.info(f"Starting inference process on GPU(s) {' '.join(map(str, config.inference_gpu_ids))}")
             logger.debug(f"Inference start command: {' '.join(inference_cmd)}")
+            # Keep log file handle open for the lifetime of the process
             # If we don't log stdout, the server hangs
-            with open(log_dir / "inference.log", "w") as log_file:
-                inference_process = Popen(
-                    inference_cmd,
-                    env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.inference_gpu_ids))},
-                    stdout=log_file,
-                    stderr=log_file,
-                )
+            inference_log_file = open(log_dir / "inference.log", "w")
+            log_files.append(inference_log_file)
+            inference_process = Popen(
+                inference_cmd,
+                env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.inference_gpu_ids))},
+                stdout=inference_log_file,
+                stderr=inference_log_file,
+            )
             processes.append(inference_process)
 
             # Start monitoring thread
@@ -555,18 +567,20 @@ def rl(config: RLConfig):
         ]
         logger.info("Starting orchestrator process")
         logger.debug(f"Orchestrator start command: {' '.join(orchestrator_cmd)}")
-        with open(log_dir / "orchestrator.log", "w") as log_file:
-            orchestrator_process = Popen(
-                orchestrator_cmd,
-                stdout=log_file,
-                stderr=log_file,
-                env={
-                    **os.environ,
-                    "LOGURU_FORCE_COLORS": "1",
-                    "WANDB_PROGRAM": "uv run rl",
-                    "WANDB_ARGS": json.dumps(start_command),
-                },
-            )
+        # Keep log file handle open for the lifetime of the process
+        orchestrator_log_file = open(log_dir / "orchestrator.log", "w")
+        log_files.append(orchestrator_log_file)
+        orchestrator_process = Popen(
+            orchestrator_cmd,
+            stdout=orchestrator_log_file,
+            stderr=orchestrator_log_file,
+            env={
+                **os.environ,
+                "LOGURU_FORCE_COLORS": "1",
+                "WANDB_PROGRAM": "uv run rl",
+                "WANDB_ARGS": json.dumps(start_command),
+            },
+        )
         processes.append(orchestrator_process)
 
         # Start monitoring thread
@@ -600,19 +614,21 @@ def rl(config: RLConfig):
         ]
         logger.info(f"Starting trainer process on GPU(s) {' '.join(map(str, config.trainer_gpu_ids))}")
         logger.debug(f"Training start command: {' '.join(trainer_cmd)}")
-        with open(log_dir / "trainer.log", "w") as log_file:
-            trainer_process = Popen(
-                trainer_cmd,
-                env={
-                    **os.environ,
-                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.trainer_gpu_ids)),
-                    "LOGURU_FORCE_COLORS": "1",
-                    "WANDB_PROGRAM": "uv run rl",
-                    "WANDB_ARGS": json.dumps(start_command),
-                },
-                stdout=log_file,
-                stderr=log_file,
-            )
+        # Keep log file handle open for the lifetime of the process
+        trainer_log_file = open(log_dir / "trainer.log", "w")
+        log_files.append(trainer_log_file)
+        trainer_process = Popen(
+            trainer_cmd,
+            env={
+                **os.environ,
+                "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.trainer_gpu_ids)),
+                "LOGURU_FORCE_COLORS": "1",
+                "WANDB_PROGRAM": "uv run rl",
+                "WANDB_ARGS": json.dumps(start_command),
+            },
+            stdout=trainer_log_file,
+            stderr=trainer_log_file,
+        )
         processes.append(trainer_process)
 
         # Start monitoring thread
@@ -650,16 +666,19 @@ def rl(config: RLConfig):
         # Cleanup threads and processes
         cleanup_threads(monitor_threads)
         cleanup_processes(processes)
+        cleanup_log_files(log_files)
 
     except KeyboardInterrupt:
         logger.warning("Received interrupt signal, terminating all processes...")
         cleanup_threads(monitor_threads)
         cleanup_processes(processes)
+        cleanup_log_files(log_files)
         sys.exit(1)
     except Exception as e:
         logger.error(f"Error occurred: {e}")
         cleanup_threads(monitor_threads)
         cleanup_processes(processes)
+        cleanup_log_files(log_files)
         raise
 
 
