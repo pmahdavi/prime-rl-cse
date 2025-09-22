@@ -1,6 +1,6 @@
 max_steps = 500
 batch_size = 1024
-micro_batch_size = 4
+micro_batch_size = 2  # Increased from 1 for better GPU utilization
 seq_len = 8192
 rollouts_per_example = 8
 mask_truncated_completions = false
@@ -26,6 +26,7 @@ interval = 50
 
 [eval]
 interval = 500
+eval_base_model = false  # Skip initial evaluation at step 0
 environment_ids = ["math500", "aime2025"]
 rollouts_per_example = [1, 8]
 

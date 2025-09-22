@@ -4,6 +4,8 @@ max_steps = 500
 
 [model]
 name = "willcb/DeepSeek-R1-Distill-Qwen-1.5B"
+optimization_dtype = "bfloat16"  # Use BF16 for 2x speedup on H100
+impl = "liger_kernel"  # Try optimized kernels for 5-10% speedup
 
 [optim]
 lr = 1e-6
