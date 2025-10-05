@@ -34,8 +34,8 @@ class LossConfig(BaseModel):
 class FakeDataLoaderConfig(BaseConfig):
     """Configures a fake data loader sampling random micro batches for debugging."""
 
-    micro_batch_size: Annotated[int, Field(ge=1)] = 8
-    batch_size: Annotated[int, Field(ge=1)] = 8
+    micro_batch_size: Annotated[int, Field(ge=1)] = 1
+    batch_size: Annotated[int, Field(ge=1)] = 2
     seq_len: Annotated[int, Field(ge=1)] = 128
 
     @model_validator(mode="after")
@@ -158,6 +158,13 @@ class RLTrainerConfig(BaseSettings):
     ] = None
     trace_path: Annotated[Path | None, Field(description="Path to write pytorch profiler trace to.")] = None
 
+    dist_timeout_seconds: Annotated[
+        int,
+        Field(
+            description="Timeout in seconds for torch distributed ops. Defaults to 600 seconds.",
+        ),
+    ] = 600
+
     @model_validator(mode="after")
     def auto_setup_bench(self):
         if self.bench:
@@ -168,33 +175,6 @@ class RLTrainerConfig(BaseSettings):
                 self.wandb.log_extras = None
             if self.ckpt:  # Do not checkpoint
                 self.ckpt = None
-        return self
-
-    @model_validator(mode="after")
-    def validate_scheduler(self):
-        # Constant scheduler does not require any validation/ setup
-        if self.scheduler.type == "constant":
-            return self
-
-        # Must specify max_steps when using a scheduler other than `constant`
-        if self.max_steps is None:
-            raise ValueError("Must specify max_steps when using a scheduler other than `constant`")
-
-        # If decay_steps is not specified, use remaining steps after warmup
-        if self.scheduler.decay_steps is None:
-            if not (self.scheduler.warmup_steps <= self.max_steps):
-                raise ValueError("config.scheduler.warmup_steps must be less than or equal to config.max_steps")
-
-            self.scheduler.decay_steps = self.max_steps - self.scheduler.warmup_steps
-            assert self.scheduler.decay_steps >= 0, "config.scheduler.decay_steps must be positive"
-
-        # If decay_steps is specified, validate it
-        else:
-            if not (self.scheduler.warmup_steps + self.scheduler.decay_steps <= self.max_steps):
-                raise ValueError(
-                    "config.scheduler.warmup_steps + config.scheduler.decay_steps must be less than or equal to config.max_steps"
-                )
-
         return self
 
     @model_validator(mode="after")

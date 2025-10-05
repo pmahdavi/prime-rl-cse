@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 import time
 from copy import deepcopy
+from datetime import timedelta
 
 # Import environment before any other imports
 # ruff: noqa: I001
@@ -13,7 +14,7 @@ from prime_rl.trainer.optim import setup_optimizer
 from prime_rl.trainer.weights import setup_weight_ckpt_manager
 from prime_rl.trainer.rl.config import RLTrainerConfig
 from prime_rl.trainer.rl.data import DataLoader, FakeDataLoader
-from prime_rl.trainer.logger import setup_logger
+from prime_rl.utils.logger import setup_logger
 from prime_rl.trainer.rl.loss import (
     shift_logits,
     selective_log_softmax,
@@ -54,7 +55,10 @@ from prime_rl.trainer.hf_uploader import HuggingFaceUploader
 def train(config: RLTrainerConfig):
     # Setup world and logger
     world = get_world()
-    logger = setup_logger(config.log, world)
+    logger = setup_logger(
+        config.log.level,
+        log_file=config.output_dir / "logs" / "trainer" / f"rank_{world.rank}.log" if config.log.file else None,
+    )
     logger.info(f"Starting RL trainer in {world}")
 
     # Print warning if running in benchmark mode
@@ -72,7 +76,7 @@ def train(config: RLTrainerConfig):
         hf_uploader = HuggingFaceUploader(config.hf, monitor)
 
     # Set precision
-    setup_torch_distributed()
+    setup_torch_distributed(timeout=timedelta(seconds=config.dist_timeout_seconds))
     torch.set_float32_matmul_precision("high")
 
     # Initialize parallel dimensions
@@ -94,13 +98,15 @@ def train(config: RLTrainerConfig):
     optimizer = setup_optimizer(config.optim, model, parallel_dims.world_mesh["dp_shard_cp"])
 
     # Set up the learning rate scheduler
-    scheduler = setup_scheduler(optimizer, config.scheduler, config.max_steps)
+    scheduler = setup_scheduler(optimizer, config.scheduler, config.max_steps, config.optim.lr)
     logger.info(f"Using `{config.scheduler.type}` scheduler ({config.scheduler})")
 
-    # Get checkpoint managers
+    # Set up weight checkpoint manager
     logger.info(f"Initializing weight checkpoint manager ({config.weights})")
     weight_ckpt_manager = setup_weight_ckpt_manager(config.output_dir, config.weights, config.ckpt, config.async_level)
+    assert weight_ckpt_manager is not None, "Weight checkpoint manager must be set on RL trainer"
 
+    # Set up checkpoint manager
     logger.info(f"Initializing checkpoint manager ({config.ckpt})")
     ckpt_manager = setup_ckpt_manager(config.output_dir, config.ckpt)
 
@@ -263,6 +269,9 @@ def train(config: RLTrainerConfig):
         logger.info(f"Starting forward and backward pass ({num_micro_batches=})")
         tensors = Tensors()  # Used to accumulate tensor statistics across micro-batches and ranks for logging
         for micro_step, micro_batch in enumerate(micro_batches):
+            # we only all reduce at the last grad acc step
+            model.set_requires_all_reduce(micro_step == len(micro_batches) - 1)
+
             input_ids = micro_batch["input_ids"].to("cuda")
             position_ids = micro_batch["position_ids"].to("cuda")
             advantages = micro_batch["advantages"].to("cuda")
@@ -321,7 +330,7 @@ def train(config: RLTrainerConfig):
                 tensors[key].append(loss_tensor)
 
             # Debug log with *local, micro step* stats
-            micro_step_message = f"Micro Step {micro_step} | Loss: {tensors['loss'][-1].mean().item():.4f} | Entropy: {tensors['entropy'][-1].mean().item():.4f} | Importance Ratio: {tensors['importance_ratio'][-1].mean().item():.4f}"
+            micro_step_message = f"Micro Step {micro_step}/{len(micro_batches)} | Loss: {tensors['loss'][-1].mean().item():.4f} | Entropy: {tensors['entropy'][-1].mean().item():.4f} | Importance Ratio: {tensors['importance_ratio'][-1].mean().item():.4f}"
             if "max_vio" in tensors:
                 micro_step_message += f" | Max Vio: {tensors['max_vio'][-1].mean().item():.4f}"
             logger.debug(micro_step_message)
@@ -334,6 +343,7 @@ def train(config: RLTrainerConfig):
         optimizer.zero_grad()
 
         # Update learning rate scheduler
+        current_lr = optimizer.param_groups[0]["lr"]
         scheduler.step()
 
         forward_backward_time = time.time() - forward_backward_start_time
@@ -364,7 +374,6 @@ def train(config: RLTrainerConfig):
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        current_lr = optimizer.param_groups[0]["lr"]
         step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {tensor_stats['loss/mean']:.4f} | Entropy: {tensor_stats['entropy/mean']:.4f} | Importance Ratio: {tensor_stats['importance_ratio/mean']:.4f} | Grad. Norm: {grad_norm:.4f} | LR: {current_lr:.2e} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}% | Peak Mem.: {peak_memory:.1f} GiB"
         if "max_vio/mean" in tensor_stats:
             step_message += f" | Max Vio: {tensor_stats['max_vio/mean']:.4f}"

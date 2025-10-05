@@ -13,7 +13,8 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from prime_rl.trainer.config import ActivationCheckpointConfig, CompileConfig, ModelConfig
-from prime_rl.trainer.custom_models import AutoModelForCausalLMPrimeRL
+from prime_rl.trainer.lora import apply_lora_to_model
+from prime_rl.trainer.models import AutoModelForCausalLMPrimeRL
 from prime_rl.trainer.parallel_dims import ParallelDims
 from prime_rl.utils.logger import get_logger
 
@@ -48,7 +49,7 @@ def get_load_balance_stats(model: nn.Module, reset_stats: bool = True) -> dict[s
             tokens_per_expert.zero_()
     if len(per_layer_max_vio) == 0:
         return {"max_vio": None}
-    return {"max_vio": torch.tensor(per_layer_max_vio)}
+    return {"max_vio": torch.tensor(per_layer_max_vio, device=torch.device("cuda"))}
 
 
 def get_model(
@@ -60,6 +61,12 @@ def get_model(
     config_model.use_cache = False
     config_model.use_grouped_mm = config.moe_use_grouped_mm
 
+    if config.debug.num_layers is not None:
+        get_logger().info(f"Setting num_layers to {config.debug.num_layers}")
+        num_hidden_layers = min(config.debug.num_layers, config_model.num_hidden_layers)
+        get_logger().info(f"removed {config_model.num_hidden_layers - num_hidden_layers} layers")
+        config_model.num_hidden_layers = num_hidden_layers
+
     with device:
         match config.impl:
             case "hf":
@@ -70,6 +77,7 @@ def get_model(
                 model_cls = AutoModelForCausalLMPrimeRL
 
         if device == torch.device("meta"):
+            get_logger().info(f"model num_layers random init: {config_model.num_hidden_layers}")
             model = model_cls.from_config(config_model, trust_remote_code=config.trust_remote_code, dtype=dtype)
         else:
             model = model_cls.from_pretrained(
@@ -92,9 +100,12 @@ def setup_tokenizer(config: ModelConfig) -> PreTrainedTokenizer:
 
 
 def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDims):
-    mp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
+    mp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=DTYPE_MAP[config.reduce_dtype])
     # TODO: Support dp_replicate
-    hsdp_mesh = parallel_dims.world_mesh["dp_shard_cp"]
+    if config.dp_replicate > 1:
+        hsdp_mesh = parallel_dims.world_mesh["dp_replicate", "dp_shard_cp"]
+    else:
+        hsdp_mesh = parallel_dims.world_mesh["dp_shard_cp"]
 
     for transformer_block in model.model.layers:
         fully_shard(
@@ -128,8 +139,13 @@ def load_dcp_from_hf(model: nn.Module, config: ModelConfig):
     from huggingface_hub import snapshot_download
     from torch.distributed.checkpoint import DefaultLoadPlanner, HuggingFaceStorageReader
 
-    path_snapshot = snapshot_download(repo_id=config.name, repo_type="model")
     model.to_empty(device="cuda")
+
+    if config.debug.random_init:
+        get_logger().warning("Zero initialization model. skipping HF checkpoint loading.")
+        return
+
+    path_snapshot = snapshot_download(repo_id=config.name, repo_type="model")
     dcp.load(
         model.state_dict(),
         storage_reader=HuggingFaceStorageReader(path=path_snapshot),
@@ -191,6 +207,7 @@ def apply_ac(model: nn.Module, ac_config: ActivationCheckpointConfig):
 
 
 def apply_compile(model: nn.Module, compile_config: CompileConfig):
+    torch._dynamo.config.capture_scalar_outputs = True
     for layer_id in range(len(model.model.layers)):
         # Doing it in-place avoids mangled fqn which can break checkpoint loading
         model.model.layers[layer_id].compile(fullgraph=compile_config.fullgraph)
@@ -205,6 +222,10 @@ def setup_model(config: ModelConfig, parallel_dims: ParallelDims) -> nn.Module:
     )
     if config.load_using_meta and not can_load_dcp_from_hf(model):
         model = get_model(config, device=torch.device("cpu"), dtype=DTYPE_MAP[config.optimization_dtype])
+
+    # Apply LoRA before FSDP setup
+    if config.experimental.lora is not None:
+        apply_lora_to_model(model, config.experimental.lora)
 
     # the right order is AC -> Compile -> FSDP
     if config.ac is not None:
@@ -221,6 +242,8 @@ def setup_model(config: ModelConfig, parallel_dims: ParallelDims) -> nn.Module:
         from prime_rl.utils.tensor_hashing import get_module_signature
 
         get_logger().info(f"model signature: {get_module_signature(model, compress=True)}")
+
+    get_logger().info(f"model num_layers: {len(model.model.layers)}")
     return model
 
 

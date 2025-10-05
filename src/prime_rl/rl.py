@@ -12,8 +12,6 @@ from threading import Event, Thread
 from typing import Annotated, Optional
 
 import tomli_w
-from loguru import logger as loguru_logger
-from loguru._logger import Logger
 from pydantic import Field, model_validator
 
 from prime_rl.inference.config import InferenceConfig
@@ -24,7 +22,7 @@ from prime_rl.trainer.rl.config import FakeDataLoaderConfig
 from prime_rl.trainer.rl.config import RLTrainerConfig as TrainerConfig
 from prime_rl.trainer.rl.config import HuggingFaceConfig
 from prime_rl.utils.config import WandbMonitorConfig
-from prime_rl.utils.logger import format_message, format_time, set_logger, setup_handlers
+from prime_rl.utils.logger import setup_logger
 from prime_rl.utils.pydantic_config import BaseSettings, get_temp_toml_file, parse_argv
 from prime_rl.utils.utils import (
     get_ckpt_dir,
@@ -49,12 +47,7 @@ class LogConfig(BaseSettings):
 
     level: Annotated[str | None, Field(description="The log level to use.")] = "info"
 
-    utc: Annotated[
-        bool | None,
-        Field(
-            description="Whether to use UTC time in the logger. If False, it will default to the local time. If the local time is wrong, you can set it by setting the `TZ` environment variable. For example, `TZ=America/Los_Angeles` will set the local time to SF time."
-        ),
-    ] = False
+    file: Annotated[bool | None, Field(description="Whether to log to a file.")] = True
 
 
 class WandbConfig(BaseSettings):
@@ -217,9 +210,13 @@ class RLConfig(BaseSettings):
     @model_validator(mode="after")
     def auto_setup_logs(self):
         # Copy log level
-        if self.log and self.log.level:
-            self.trainer.log.level = self.log.level
-            self.orchestrator.log.level = self.log.level
+        if self.log:
+            if self.log.level:
+                self.trainer.log.level = self.log.level
+                self.orchestrator.log.level = self.log.level
+            if self.log.file:
+                self.trainer.log.file = self.log.file
+                self.orchestrator.log.file = self.log.file
 
         return self
 
@@ -379,15 +376,6 @@ class RLConfig(BaseSettings):
         return self
 
 
-def setup_logger(log_config: LogConfig) -> Logger:
-    # Setup the logger handlers
-    format = format_time(log_config) + format_message()
-    logger = setup_handlers(loguru_logger, format, log_config, rank=0)
-    set_logger(logger)
-
-    return logger
-
-
 def cleanup_threads(threads: list[Thread]):
     for thread in threads:
         thread.join(timeout=5)
@@ -476,7 +464,9 @@ def _setup_gpu_environment():
 
 def rl(config: RLConfig):
     # Setup logger
-    logger = setup_logger(config.log)
+    logger = setup_logger(
+        config.log.level or "info", log_file=config.output_dir / "logs" / "rl.log" if config.log.file else None
+    )
     start_command = sys.argv
     logger.info("Starting RL run")
     logger.debug(f"RL start command: {' '.join(start_command)}")
@@ -528,14 +518,13 @@ def rl(config: RLConfig):
             logger.debug(f"Inference start command: {' '.join(inference_cmd)}")
             # Keep log file handle open for the lifetime of the process
             # If we don't log stdout, the server hangs
-            inference_log_file = open(log_dir / "inference.log", "w")
-            log_files.append(inference_log_file)
-            inference_process = Popen(
-                inference_cmd,
-                env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.inference_gpu_ids))},
-                stdout=inference_log_file,
-                stderr=inference_log_file,
-            )
+            with open(log_dir / "inference.stdout", "w") as log_file:
+                inference_process = Popen(
+                    inference_cmd,
+                    env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.inference_gpu_ids))},
+                    stdout=log_file,
+                    stderr=log_file,
+                )
             processes.append(inference_process)
 
             # Start monitoring thread
@@ -567,20 +556,18 @@ def rl(config: RLConfig):
         ]
         logger.info("Starting orchestrator process")
         logger.debug(f"Orchestrator start command: {' '.join(orchestrator_cmd)}")
-        # Keep log file handle open for the lifetime of the process
-        orchestrator_log_file = open(log_dir / "orchestrator.log", "w")
-        log_files.append(orchestrator_log_file)
-        orchestrator_process = Popen(
-            orchestrator_cmd,
-            stdout=orchestrator_log_file,
-            stderr=orchestrator_log_file,
-            env={
-                **os.environ,
-                "LOGURU_FORCE_COLORS": "1",
-                "WANDB_PROGRAM": "uv run rl",
-                "WANDB_ARGS": json.dumps(start_command),
-            },
-        )
+        with open(log_dir / "orchestrator.stdout", "w") as log_file:
+            orchestrator_process = Popen(
+                orchestrator_cmd,
+                stdout=log_file,
+                stderr=log_file,
+                env={
+                    **os.environ,
+                    "LOGURU_FORCE_COLORS": "1",
+                    "WANDB_PROGRAM": "uv run rl",
+                    "WANDB_ARGS": json.dumps(start_command),
+                },
+            )
         processes.append(orchestrator_process)
 
         # Start monitoring thread
@@ -602,11 +589,17 @@ def rl(config: RLConfig):
         trainer_cmd = [
             "uv",
             "run",
+            "env",
+            "PYTHONUNBUFFERED=1",
             "torchrun",
             f"--rdzv-endpoint=localhost:{get_free_port()}",
             f"--rdzv-id={uuid.uuid4().hex}",
-            "--nproc-per-node",
-            str(len(config.trainer_gpu_ids)),
+            # Pipe all logs to file, and only master rank logs to stdout
+            f"--log-dir={config.output_dir / 'torchrun'}",
+            "--local-ranks-filter=0",
+            "--redirect=3",
+            "--tee=3",
+            f"--nproc-per-node={len(config.trainer_gpu_ids)}",
             "-m",
             "prime_rl.trainer.rl.train",
             "@",
@@ -614,21 +607,19 @@ def rl(config: RLConfig):
         ]
         logger.info(f"Starting trainer process on GPU(s) {' '.join(map(str, config.trainer_gpu_ids))}")
         logger.debug(f"Training start command: {' '.join(trainer_cmd)}")
-        # Keep log file handle open for the lifetime of the process
-        trainer_log_file = open(log_dir / "trainer.log", "w")
-        log_files.append(trainer_log_file)
-        trainer_process = Popen(
-            trainer_cmd,
-            env={
-                **os.environ,
-                "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.trainer_gpu_ids)),
-                "LOGURU_FORCE_COLORS": "1",
-                "WANDB_PROGRAM": "uv run rl",
-                "WANDB_ARGS": json.dumps(start_command),
-            },
-            stdout=trainer_log_file,
-            stderr=trainer_log_file,
-        )
+        with open(log_dir / "trainer.stdout", "w") as log_file:
+            trainer_process = Popen(
+                trainer_cmd,
+                env={
+                    **os.environ,
+                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, config.trainer_gpu_ids)),
+                    "LOGURU_FORCE_COLORS": "1",
+                    "WANDB_PROGRAM": "uv run rl",
+                    "WANDB_ARGS": json.dumps(start_command),
+                },
+                stdout=log_file,
+                stderr=log_file,
+            )
         processes.append(trainer_process)
 
         # Start monitoring thread
@@ -643,9 +634,7 @@ def rl(config: RLConfig):
         # Monitor all processes for failures
         logger.success("Startup complete. Showing trainer logs...")
 
-        tail_process = Popen(
-            ["tail", "-F", log_dir / "trainer.log", log_dir / "orchestrator.log"],
-        )
+        tail_process = Popen(["tail", "-F", log_dir / "trainer.stdout"])
         processes.append(tail_process)
 
         # Check for errors from monitor threads
