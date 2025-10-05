@@ -32,14 +32,15 @@ cache_volume = modal.Volume.from_name("prime-rl-cache", create_if_missing=True)
 
 # Build the container image with all dependencies
 # Using PyTorch CUDA development image for flash-attn compilation
+# This matches Dockerfile.cuda for consistency
 prime_rl_image = (
     modal.Image.from_registry("pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel")
-    # Set CUDA environment
+    # Set CUDA environment (matches Dockerfile.cuda)
     .env({
         "CUDA_HOME": "/usr/local/cuda",
         "PATH": "/usr/local/cuda/bin:$PATH",
     })
-    # Install system dependencies
+    # Install system dependencies (matches install.sh + Dockerfile.cuda)
     .apt_install([
         "git", 
         "curl", 
@@ -47,20 +48,32 @@ prime_rl_image = (
         "vim",  # For debugging
         "htop", # For monitoring
         "tmux", # For session management
+        "nvtop",  # For GPU monitoring
+        "openssh-client",  # For SSH operations
     ])
-    # Install uv package manager
+    # Install uv package manager (using official installer like Dockerfile.cuda)
     .run_commands(
-        "pip install uv",
+        "curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 UV_INSTALL_DIR=/usr/local/bin sh",
     )
+    # Set uv environment variables (matches Dockerfile.cuda)
+    .env({
+        "PATH": "/usr/local/bin:$PATH",
+        "UV_PYTHON_INSTALL_DIR": "/usr/local/share/uv/python",
+        "UV_CACHE_DIR": "/usr/local/share/uv/cache",
+        "UV_COMPILE_BYTECODE": "1",
+        "UV_LINK_MODE": "copy",
+    })
     # Clone the repository
     .run_commands(
         "cd /root && git clone https://github.com/pmahdavi/prime-rl-cse.git",
     )
     # Install dependencies with all extras (including flash-attn)
+    # Note: We don't use --locked here because the lockfile might be stale
+    # The runtime git pull ensures we get the latest code
     .run_commands(
         "cd /root/prime-rl-cse && uv sync --all-extras",
     )
-    # Set environment variables for runtime
+    # Set runtime environment variables
     .env({
         "HF_HUB_CACHE": "/cache/huggingface",
         "TORCH_HOME": "/cache/torch",
@@ -83,6 +96,7 @@ prime_rl_image = (
         "/cache": cache_volume,
     },
     timeout=86400,  # 24 hour timeout
+    enable_memory_snapshot=True,  # Dramatically improves cold start (2-5min → 10-30sec)
 )
 def train_prime_rl(
     experiment_name: str,
@@ -94,6 +108,7 @@ def train_prime_rl(
     wandb_project: Optional[str] = None,
     wandb_name: Optional[str] = None,
     output_subdir: str = "",
+    use_local_code: bool = False,
 ):
     """
     Run prime-rl training on Modal.
@@ -104,11 +119,15 @@ def train_prime_rl(
     import subprocess
     import os
     
-    # Update to the latest code from GitHub at runtime
-    print("Updating to latest code from GitHub...")
-    os.chdir("/root/prime-rl-cse")
-    subprocess.run(["git", "fetch", "origin"], check=True)
-    subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
+    if use_local_code:
+        print("Using local code (mounted from your machine)")
+        print("⚠️  Local mode: Changes are from your laptop, not GitHub")
+    else:
+        # Update to the latest code from GitHub at runtime
+        print("Updating to latest code from GitHub...")
+        os.chdir("/root/prime-rl-cse")
+        subprocess.run(["git", "fetch", "origin"], check=True)
+        subprocess.run(["git", "reset", "--hard", "origin/main"], check=True)
     
     # Dependencies are already installed in the Docker image
     
@@ -257,6 +276,7 @@ def main(
     download_results: bool = True,
     distributed: bool = False,
     num_nodes: int = 1,
+    use_local_code: bool = False,
 ):
     """
     Deploy prime-rl training on Modal.
@@ -274,21 +294,25 @@ def main(
         download_results: Whether to download results after training
         distributed: Enable multi-node distributed training
         num_nodes: Number of nodes for distributed training
+        use_local_code: Use local files instead of GitHub (for development)
     
     Examples:
         # Simple run with 2 GPUs (1 training, 1 inference)
-        modal run modal_deployment.py
+        modal run modal/deploy.py
         
         # Hendrycks math with 8 GPUs (2 training, 6 inference)
-        modal run modal_deployment.py \
+        modal run modal/deploy.py \
             --trainer-config configs/hendrycks_math/1b/train.toml \
             --orchestrator-config configs/hendrycks_math/1b/orch.toml \
             --inference-config configs/hendrycks_math/1b/infer.toml \
             --gpu-count 8 \
             --trainer-gpu-ratio 0.25
         
+        # Local development mode (uses your local code changes)
+        modal run modal/deploy.py --use-local-code
+        
         # Multi-node training with 4 nodes
-        modal run modal_deployment.py \
+        modal run modal/deploy.py \
             --distributed \
             --num-nodes 4 \
             --gpu-type H100
@@ -333,15 +357,41 @@ def main(
     
     print(f"  - Estimated time: varies by experiment")
     print(f"  - Estimated cost: ~${gpu_count * 3.70:.2f}/hour (A100 pricing)")
+    
+    if use_local_code:
+        print(f"\n⚠️  LOCAL DEV MODE ENABLED")
+        print(f"  - Using local code from your laptop")
+        print(f"  - Changes will be synced automatically")
+        print(f"  - NOT pulling from GitHub")
+    
     print(f"="*60)
     
     # Run training
     print("\n📦 Starting training on Modal...")
     print("(This may take a few minutes to build the container on first run)")
     
-    # Note: GPU configuration will use the default specified in the @app.function decorator
-    # To use custom GPU settings, you'll need to modify the decorator in train_prime_rl function
-    result = train_prime_rl.remote(
+    # Create function with local mounts if needed
+    train_fn = train_prime_rl
+    if use_local_code:
+        # Get the project root (parent of modal/ directory)
+        project_root = Path(__file__).parent.parent
+        
+        # Mount local directories to the container
+        train_fn = train_prime_rl.with_options(
+            mounts=[
+                modal.Mount.from_local_dir(
+                    project_root / "src",
+                    remote_path="/root/prime-rl-cse/src"
+                ),
+                modal.Mount.from_local_dir(
+                    project_root / "configs",
+                    remote_path="/root/prime-rl-cse/configs"
+                ),
+            ]
+        )
+        print("✅ Local code mounted: src/ and configs/")
+    
+    result = train_fn.remote(
         experiment_name=experiment_name,
         trainer_config=trainer_config,
         orchestrator_config=orchestrator_config,
@@ -350,6 +400,7 @@ def main(
         inference_gpus=inference_gpus,
         wandb_project=wandb_project,
         wandb_name=wandb_name or experiment_name,
+        use_local_code=use_local_code,
     )
     
     print(result)

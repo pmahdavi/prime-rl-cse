@@ -19,24 +19,37 @@ cache_volume = modal.Volume.from_name("prime-rl-cache", create_if_missing=True)
 
 # Build the container image with all dependencies
 # Using PyTorch CUDA development image for flash-attn compilation
+# This matches Dockerfile.cuda for consistency
 prime_rl_image = (
     modal.Image.from_registry("pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel")
-    # Set CUDA environment
+    # Set CUDA environment (matches Dockerfile.cuda)
     .env({
         "CUDA_HOME": "/usr/local/cuda",
         "PATH": "/usr/local/cuda/bin:$PATH",
     })
-    # Install system dependencies
+    # Install system dependencies (matches install.sh + Dockerfile.cuda)
     .apt_install([
         "git", 
         "curl", 
         "build-essential",
         "vim",  # For debugging
+        "htop", # For monitoring
+        "tmux", # For session management
+        "nvtop",  # For GPU monitoring
+        "openssh-client",  # For SSH operations
     ])
-    # Install uv package manager
+    # Install uv package manager (using official installer like Dockerfile.cuda)
     .run_commands(
-        "pip install uv",
+        "curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 UV_INSTALL_DIR=/usr/local/bin sh",
     )
+    # Set uv environment variables (matches Dockerfile.cuda)
+    .env({
+        "PATH": "/usr/local/bin:$PATH",
+        "UV_PYTHON_INSTALL_DIR": "/usr/local/share/uv/python",
+        "UV_CACHE_DIR": "/usr/local/share/uv/cache",
+        "UV_COMPILE_BYTECODE": "1",
+        "UV_LINK_MODE": "copy",
+    })
     # Clone the repository
     .run_commands(
         "cd /root && git clone https://github.com/pmahdavi/prime-rl-cse.git",
@@ -50,7 +63,7 @@ prime_rl_image = (
         "cd /root/prime-rl-cse && uv run python -c \"from transformers import AutoTokenizer, AutoModelForCausalLM; print('Pre-downloading model: willcb/DeepSeek-R1-Distill-Qwen-1.5B'); AutoTokenizer.from_pretrained('willcb/DeepSeek-R1-Distill-Qwen-1.5B'); AutoModelForCausalLM.from_pretrained('willcb/DeepSeek-R1-Distill-Qwen-1.5B'); print('Model downloaded successfully')\"",
         gpu="any",  # Use any available GPU for model download
     )
-    # Set environment variables for runtime
+    # Set runtime environment variables
     .env({
         "HF_HUB_CACHE": "/cache/huggingface",
         "TORCH_HOME": "/cache/torch",
@@ -71,6 +84,7 @@ prime_rl_image = (
         "/cache": cache_volume,
     },
     timeout=86400,  # 24 hour timeout
+    enable_memory_snapshot=True,  # Dramatically improves cold start (2-5min → 10-30sec)
 )
 def train_hendrycks_math(
     experiment_name: str,
