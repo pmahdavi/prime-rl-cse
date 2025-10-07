@@ -93,7 +93,7 @@ def train(config: RLTrainerConfig):
 
     # Set up the optimizer
     logger.info(f"Initializing optimizer ({config.optim})")
-    logger.info(f"Using `{config.loss.type}` loss ({config.loss})")
+    logger.info(f"Using `{config.loss.ratio_type}` importance ratio ({config.loss})")
 
     optimizer = setup_optimizer(config.optim, model, parallel_dims.world_mesh["dp_shard_cp"])
 
@@ -261,9 +261,9 @@ def train(config: RLTrainerConfig):
         batch_size = micro_batch_size * num_micro_batches
 
         # Normalize by the local number of unmasked tokens in the batch (per-batch length normalization)
-        if config.loss.norm_type == "token":
+        if config.loss.ratio_type == "token":
             loss_scale = sum(micro_batch["loss_mask"].sum().item() for micro_batch in micro_batches)
-        elif config.loss.norm_type == "sequence":
+        elif config.loss.ratio_type == "sequence":
             loss_scale = batch_size
 
         logger.info(f"Starting forward and backward pass ({num_micro_batches=})")
@@ -326,7 +326,10 @@ def train(config: RLTrainerConfig):
 
             # Add loss tensors to tensor dict for logging purposes
             for key, loss_tensor in loss_tensors.items():
-                loss_tensor = loss_tensor.detach()[loss_mask.squeeze()].detach().to("cpu")
+                if config.loss.ratio_type == "sequence":
+                    loss_tensor = loss_tensor.detach().to("cpu")
+                else:
+                    loss_tensor = loss_tensor.detach()[loss_mask.squeeze()].detach().to("cpu")
                 tensors[key].append(loss_tensor)
 
             # Debug log with *local, micro step* stats
