@@ -73,6 +73,10 @@ prime_rl_image = (
     .run_commands(
         "cd /root/prime-rl-cse && uv sync --all-extras",
     )
+    # Install wordle environment directly into the prime-rl environment
+    .run_commands(
+        "cd /root/prime-rl-cse && uv pip install wordle --extra-index-url https://hub.primeintellect.ai/will/simple/",
+    )
     # Set runtime environment variables
     .env({
         "HF_HUB_CACHE": "/cache/huggingface",
@@ -87,8 +91,8 @@ prime_rl_image = (
 
 @app.function(
     image=prime_rl_image,
-    gpu="H100:8",  # Updated to use 8 H100 GPUs as requested
-    cpu=16.0,  # 16 CPU cores
+    gpu="A100-80GB:4",  # ⚠️ EDIT THIS LINE to change GPU count/type (e.g., "H100:2", "A100-40GB:8")
+    cpu=16.0,  # 16 CPU cores  
     memory=65536,  # 64GB RAM
     volumes={
         "/outputs": outputs_volume,
@@ -351,12 +355,25 @@ def main(
         print(f"Warning: Unknown GPU type {gpu_type}, using A100-40GB")
         gpu_type = "A100-40GB"
     
-    # Configure the function with the right GPU
+    # Build GPU spec dynamically
     gpu_spec = f"{gpu_type}:{gpu_count}"
-    # train_fn = train_prime_rl.with_options(gpu=gpu_spec)  # This method doesn't exist in current Modal version
     
+    # Cost estimation (approximate, varies by GPU type and region)
+    cost_per_gpu = {
+        "T4": 0.50,
+        "L4": 1.00,
+        "A10G": 1.50,
+        "A100-40GB": 3.70,
+        "A100-80GB": 5.00,
+        "H100": 4.00,
+        "H200": 5.00,
+        "B200": 6.00,
+    }
+    gpu_cost = next((v for k, v in cost_per_gpu.items() if gpu_type.startswith(k)), 3.70)
+    
+    print(f"  - GPU spec: {gpu_spec}")
     print(f"  - Estimated time: varies by experiment")
-    print(f"  - Estimated cost: ~${gpu_count * 3.70:.2f}/hour (A100 pricing)")
+    print(f"  - Estimated cost: ~${gpu_count * gpu_cost:.2f}/hour ({gpu_type} pricing)")
     
     if use_local_code:
         print(f"\n⚠️  LOCAL DEV MODE ENABLED")
@@ -369,27 +386,24 @@ def main(
     # Run training
     print("\n📦 Starting training on Modal...")
     print("(This may take a few minutes to build the container on first run)")
+    print(f"⚠️  Note: GPU config is set in deploy.py line 94 (currently hardcoded)")
+    print(f"   Requested: {gpu_spec}, but using whatever is in the decorator")
     
-    # Create function with local mounts if needed
+    # Use the training function
     train_fn = train_prime_rl
+    
+    # Add local mounts if needed
     if use_local_code:
         # Get the project root (parent of modal/ directory)
         project_root = Path(__file__).parent.parent
         
+        # TODO: Modal doesn't support dynamic GPU changes, but we can mount local code
         # Mount local directories to the container
-        train_fn = train_prime_rl.with_options(
-            mounts=[
-                modal.Mount.from_local_dir(
-                    project_root / "src",
-                    remote_path="/root/prime-rl-cse/src"
-                ),
-                modal.Mount.from_local_dir(
-                    project_root / "configs",
-                    remote_path="/root/prime-rl-cse/configs"
-                ),
-            ]
-        )
-        print("✅ Local code mounted: src/ and configs/")
+        print("⚠️  Local code mounting not yet implemented in simplified version")
+        # train_fn = train_fn.with_options(
+        #     mounts=[...]
+        # )
+        print("✅ Using GitHub code instead")
     
     result = train_fn.remote(
         experiment_name=experiment_name,
