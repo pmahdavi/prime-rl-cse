@@ -1,206 +1,237 @@
-# Modal Deployment for prime-rl
+# Modal Deployment for PRIME-RL
 
-This directory contains scripts and documentation for deploying prime-rl training on [Modal](https://modal.com), a serverless GPU platform.
+Run PRIME-RL training on [Modal](https://modal.com) serverless GPU infrastructure with a single command.
 
-## 🚀 Quick Start (5 minutes)
+## Quick Start
 
-### 1. Install Modal
 ```bash
-# In your conda environment
-pip install modal
-
-# Authenticate (one-time setup)
-modal setup
-```
-
-### 2. Set API Keys
-Make sure these are in your `~/.zshrc` or `~/.bashrc`:
-```bash
-export WANDB_API_KEY="your_wandb_key"
-export HF_TOKEN="your_huggingface_token"
-```
-
-### 3. Run Training
-```bash
-# Simple reverse text experiment (2 GPUs)
+# Run with default settings (reverse_text RL training with W&B tracking)
 modal run modal/deploy.py
 
-# Hendrycks math with 8 GPUs (2 training, 6 inference)
-modal run modal/deploy.py \
-  --trainer-config configs/hendrycks_math/1b/train.toml \
-  --orchestrator-config configs/hendrycks_math/1b/orch.toml \
-  --inference-config configs/hendrycks_math/1b/infer.toml \
-  --gpu-count 8 \
-  --trainer-gpu-ratio 0.25
-
-# LOCAL DEVELOPMENT: Test local changes without pushing to GitHub
-modal run modal/deploy.py --use-local-code
-
-# Using the example script
-modal run modal/examples/hendrycks_math.py
+# Run custom command
+modal run modal/deploy.py --command "uv run rl --trainer @ configs/..."
 ```
 
-## 📁 Directory Structure
+## Prerequisites
 
-```
-modal/
-├── README.md              # This file - Getting started guide
-├── deploy.py              # Main deployment script
-├── mcp_server_v2.py       # 🤖 MCP server for chat-based Modal control
-├── mcp_config.json        # Example MCP configuration
-├── test_mcp.py            # Test script for MCP server
-├── docs/                  # 📚 Documentation
-│   ├── SUMMARY.md         # Overview of all improvements
-│   ├── DEEP_DIVE.md       # Comprehensive Modal feature guide
-│   ├── QUICK_WINS.md      # 30-minute improvements
-│   ├── QUICK_REFERENCE.md # Cheat sheet & commands
-│   ├── OPTIMIZATIONS.md   # Long-term optimization roadmap
-│   └── CHANGELOG.md       # What changed and why
-└── examples/
-    └── hendrycks_math.py  # Example for specific experiment
-```
+1. **Install Modal CLI**:
+   ```bash
+   pip install modal
+   ```
 
-### 📖 Documentation Guide
+2. **Set up Modal account**:
+   ```bash
+   modal setup
+   ```
 
-**New to Modal?** Start here! ↓
-1. **This README** - Basic usage and quick start
-2. [`docs/QUICK_REFERENCE.md`](docs/QUICK_REFERENCE.md) - Commands and patterns
+3. **Create Modal secrets** (required for W&B and HuggingFace):
+   ```bash
+   # Create wandb secret
+   modal secret create wandb WANDB_API_KEY=your_wandb_key_here
 
-**Want to understand what's under the hood?** ↓
-3. [`docs/SUMMARY.md`](docs/SUMMARY.md) - Overview of improvements and features
-4. [`docs/DEEP_DIVE.md`](docs/DEEP_DIVE.md) - Comprehensive guide to Modal features
+   # Create huggingface secret
+   modal secret create huggingface HF_TOKEN=your_hf_token_here
+   ```
 
-**Ready to optimize further?** ↓
-5. [`docs/QUICK_WINS.md`](docs/QUICK_WINS.md) - Easy improvements (30 min each)
-6. [`docs/OPTIMIZATIONS.md`](docs/OPTIMIZATIONS.md) - Advanced optimization roadmap
+   Or create them via the web UI:
+   - https://modal.com/secrets
 
-**Curious what changed?** ↓
-7. [`docs/CHANGELOG.md`](docs/CHANGELOG.md) - Complete change history
+## Usage Examples
 
-## ✅ Key Features
-
-- **Serverless GPU**: Pay only for what you use
-- **Automatic Setup**: Dependencies, CUDA tools, and models pre-installed
-- **Flexible GPU Allocation**: Split GPUs between training and inference
-- **Persistent Storage**: Results saved to Modal volumes
-- **Cost Effective**: ~$3.70/hour per A100
-- **Local Dev Mode**: Test changes instantly without pushing to GitHub
-- **Fast Cold Starts**: Memory snapshots reduce startup from 2-5 min → 10-30 sec
-
-## 🛠️ Technical Details
-
-### Image Configuration
-We use a PyTorch CUDA development image to ensure compatibility with flash-attn:
-```python
-modal.Image.from_registry("pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel")
-```
-
-The build process matches `Dockerfile.cuda` and `scripts/install.sh` for consistency:
-- Uses official `uv` installer (not pip) for latest version
-- Sets proper environment variables for `uv` caching and bytecode compilation
-- Includes monitoring tools (`nvtop`, `htop`, `tmux`)
-- Clones repo at build time, pulls latest at runtime for flexibility
-
-### GPU Configuration
-Modal's new syntax for GPU specification:
-```python
-gpu="A100-40GB:8"  # 8x A100 40GB GPUs
-```
-
-### Inference Parallelism
-When using multiple GPUs for inference, we automatically configure:
-```python
---inference.parallel.dp 6  # Data parallel
---inference.parallel.tp 1  # Tensor parallel
-```
-
-## 📊 Monitoring
+### Basic RL Training
 
 ```bash
-# View logs
+# Run with defaults (reverse_text, 2 GPUs: 1 trainer + 1 inference)
+modal run modal/deploy.py
+```
+
+### Custom Command
+
+```bash
+# Run any command you want
+modal run modal/deploy.py --command "uv run rl \
+  --trainer @ configs/reverse_text/rl/train.toml \
+  --orchestrator @ configs/reverse_text/rl/orch.toml \
+  --inference @ configs/reverse_text/rl/infer.toml \
+  --trainer-gpu-ids 0 \
+  --inference-gpu-ids 1"
+```
+
+### SFT Training
+
+```bash
+modal run modal/deploy.py --command "uv run sft @ configs/debug/sft/train.toml"
+```
+
+### Evaluation
+
+```bash
+modal run modal/deploy.py --command "uv run eval \
+  --model.name PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT \
+  --environment-ids reverse_text"
+```
+
+### Custom Experiment Name
+
+```bash
+modal run modal/deploy.py \
+  --command "uv run rl --trainer @ configs/..." \
+  --experiment-name "my-custom-experiment"
+```
+
+### Different GPU Types
+
+Edit `modal/deploy.py` line 106 to change GPU configuration:
+
+```python
+@app.function(
+    image=prime_rl_image,
+    gpu="H100:8",  # Change this line (e.g., "A100-80GB:4", "H100:2")
+    ...
+)
+```
+
+## Command Line Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--command` | str | (reverse_text RL) | Command to run on Modal |
+| `--experiment-name` | str | auto-generated | Name for this experiment |
+| `--gpu-type` | str | "A100-40GB" | GPU type (informational only) |
+| `--gpu-count` | int | 2 | Total GPUs (informational only) |
+| `--download-results` | bool | True | Show download instructions |
+
+**Note**: GPU configuration is currently hardcoded in `deploy.py` at line 106. The `--gpu-type` and `--gpu-count` flags are informational only for cost estimation.
+
+## Outputs
+
+All outputs are saved to Modal volumes:
+
+- **Logs**: Training, orchestrator, and inference logs
+- **Rollouts**: Generated rollout data for each step
+- **Weights**: Model checkpoints at specified intervals
+- **Checkpoints**: Full training state for resumption
+
+### Downloading Results
+
+```bash
+# Download entire experiment
+modal volume get prime-rl-outputs <experiment-name> ./outputs/<experiment-name>
+
+# List experiments
+modal volume ls prime-rl-outputs
+
+# List files in an experiment
+modal volume ls prime-rl-outputs/<experiment-name>
+```
+
+## Monitoring
+
+```bash
+# View real-time logs
 modal app logs
 
 # Monitor GPU usage
 modal app stats
 
-# List experiments
-modal volume list prime-rl-outputs
-
-# Download results
-modal volume get prime-rl-outputs experiment-name ./outputs/experiment-name
+# View on W&B (if enabled)
+# Go to: https://wandb.ai/<your-username>/prime-rl
 ```
 
-## 🔧 Advanced Usage
+## Architecture
 
-### Local Development Mode
+The deployment uses Modal 1.0 API with:
 
-For rapid iteration, use `--use-local-code` to test changes without pushing to GitHub:
+- **Base Image**: `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel`
+- **Package Manager**: `uv` for fast dependency installation
+- **Secrets**: Automatic injection of W&B and HuggingFace tokens
+- **Volumes**: Persistent storage for outputs, checkpoints, and cache
+- **Code Mounting**: Your local `src/` and `configs/` are mounted at runtime for fast iteration
 
+### Image Build Process
+
+1. Install system dependencies (git, curl, build tools)
+2. Install `uv` package manager
+3. Copy and install Python dependencies from `pyproject.toml` and `uv.lock`
+4. Set up virtual environment at `/app/.venv`
+5. Mount local source code and configs at runtime (for fast iteration)
+
+## W&B Integration
+
+By default, the script enables W&B tracking:
+
+- **Project**: `prime-rl`
+- **Run name**: Based on experiment type (e.g., `reverse-text-modal`)
+
+To disable W&B, remove the `--wandb.*` flags from the default command in `deploy.py`.
+
+## Cost Estimation
+
+Approximate costs (varies by region and availability):
+
+| GPU Type | Cost/GPU/Hour | Example: 8 GPUs |
+|----------|---------------|-----------------|
+| A100-40GB | $3.70 | $29.60/hour |
+| A100-80GB | $5.00 | $40.00/hour |
+| H100 | $4.00 | $32.00/hour |
+| H200 | $5.00 | $40.00/hour |
+
+## Troubleshooting
+
+### Build Issues
+
+If you get dependency errors:
 ```bash
-# 1. Make changes to your local code
-vim src/prime_rl/trainer/rl/loss.py
+# Update lockfile locally first
+uv lock
 
-# 2. Run immediately on Modal with your changes
-modal run modal/deploy.py --use-local-code
-
-# No git commit/push needed!
+# Then deploy
+modal run modal/deploy.py
 ```
 
-**How it works:**
-- Mounts your local `src/` and `configs/` directories to Modal
-- Changes sync automatically (no git operations)
-- Perfect for debugging and experimentation
+### Secret Issues
 
-**When to use:**
-- ✅ Rapid prototyping and testing
-- ✅ Debugging specific issues
-- ✅ Iterating on algorithms
-
-**When NOT to use:**
-- ❌ Production runs (use GitHub for reproducibility)
-- ❌ Sharing results with team (code must be in git)
-- ❌ Long-running experiments (local machine must stay on)
-
-### Custom GPU Types
+If secrets are missing:
 ```bash
-modal run modal/deploy.py --gpu-type H100 --gpu-count 4
+# List existing secrets
+modal secret list
+
+# Recreate if needed
+modal secret create wandb WANDB_API_KEY=$WANDB_API_KEY
+modal secret create huggingface HF_TOKEN=$HF_TOKEN
 ```
 
-### Distributed Training (Coming Soon)
-```bash
-modal run modal/deploy.py --distributed --num-nodes 4
+### Out of Memory
+
+If you hit OOM errors, reduce batch size in your config TOML or allocate more GPUs.
+
+## Advanced Configuration
+
+### Multi-Node Training
+
+Multi-node distributed training is not currently supported in this simple deployment script. For multi-node training, use the manual setup described in the main PRIME-RL README.
+
+### Custom Docker Image
+
+To use a custom base image, modify the `prime_rl_image` definition in `deploy.py`:
+
+```python
+prime_rl_image = (
+    modal.Image.from_registry("your/custom:image")
+    # ... rest of setup
+)
 ```
 
-## ⚡ Performance Optimizations
+## Development Workflow
 
-### Memory Snapshots (Enabled by Default)
-We use Modal's memory snapshot feature to dramatically improve cold start times:
+1. Make changes to your code locally in `src/`
+2. Run deployment - your changes are automatically synced
+3. No need to rebuild the image unless you change dependencies
 
-- **First run**: Container initialization takes 2-5 minutes (imports, model loading)
-- **Subsequent runs**: Restored from snapshot in 10-30 seconds
-- **How it works**: Modal captures container state after initialization and restores it instantly
+**Fast iteration**: Source code is mounted at runtime, so changes to `src/` and `configs/` don't require image rebuilds!
 
-This is especially valuable when:
-- Running multiple experiments back-to-back
-- Iterating on training hyperparameters
-- Using the same configuration repeatedly
-
-### Additional Optimizations
-For more advanced optimizations, see `modal/OPTIMIZATIONS.md`:
-- Class-based patterns with `@modal.enter()`
-- Keep-warm containers for zero cold starts
-- Multi-node training with `@clustered` (beta)
-
-## 🐛 Troubleshooting
-
-1. **Build Errors**: The container build is cached, first run takes ~5-10 minutes
-2. **GPU Allocation**: Ensure trainer-gpu-ratio leaves at least 1 GPU for inference
-3. **API Keys**: Check that WANDB_API_KEY and HF_TOKEN are set
-4. **Results**: Use `modal volume get` to download outputs
-5. **Slow Cold Starts**: First run after image rebuild will be slow; subsequent runs use memory snapshots
-
-## 📚 References
+## Resources
 
 - [Modal Documentation](https://modal.com/docs)
-- [prime-rl Documentation](../README.md)
-- [Modal Pricing](https://modal.com/pricing) 
+- [PRIME-RL Documentation](../README.md)
+- [Modal Pricing](https://modal.com/pricing)
