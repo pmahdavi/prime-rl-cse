@@ -81,14 +81,17 @@ modal run modal/deploy.py \
 
 ### Different GPU Types
 
-Edit `modal/deploy.py` line 106 to change GPU configuration:
+Set the `MODAL_GPU_CONFIG` environment variable to change GPU configuration:
 
-```python
-@app.function(
-    image=prime_rl_image,
-    gpu="H100:8",  # Change this line (e.g., "A100-80GB:4", "H100:2")
-    ...
-)
+```bash
+# Use 8 H100 GPUs
+MODAL_GPU_CONFIG="H100:8" modal run modal/deploy.py
+
+# Use 4 A100-80GB GPUs
+MODAL_GPU_CONFIG="A100-80GB:4" modal run modal/deploy.py
+
+# Default: H100:4
+modal run modal/deploy.py
 ```
 
 ## Command Line Arguments
@@ -97,11 +100,21 @@ Edit `modal/deploy.py` line 106 to change GPU configuration:
 |----------|------|---------|-------------|
 | `--command` | str | (reverse_text RL) | Command to run on Modal |
 | `--experiment-name` | str | auto-generated | Name for this experiment |
-| `--gpu-type` | str | "A100-40GB" | GPU type (informational only) |
-| `--gpu-count` | int | 2 | Total GPUs (informational only) |
 | `--download-results` | bool | True | Show download instructions |
 
-**Note**: GPU configuration is currently hardcoded in `deploy.py` at line 106. The `--gpu-type` and `--gpu-count` flags are informational only for cost estimation.
+## GPU Configuration
+
+Set the `MODAL_GPU_CONFIG` environment variable to change GPU allocation:
+
+```bash
+# Examples
+MODAL_GPU_CONFIG="H100:8" modal run modal/deploy.py
+MODAL_GPU_CONFIG="A100-80GB:4" modal run modal/deploy.py
+MODAL_GPU_CONFIG="L4:2" modal run modal/deploy.py
+
+# Default if not set: H100:4
+modal run modal/deploy.py
+```
 
 ## Outputs
 
@@ -167,14 +180,19 @@ To disable W&B, remove the `--wandb.*` flags from the default command in `deploy
 
 ## Cost Estimation
 
-Approximate costs (varies by region and availability):
+Modal GPU pricing (as of 2025):
 
-| GPU Type | Cost/GPU/Hour | Example: 8 GPUs |
-|----------|---------------|-----------------|
-| A100-40GB | $3.70 | $29.60/hour |
-| A100-80GB | $5.00 | $40.00/hour |
-| H100 | $4.00 | $32.00/hour |
-| H200 | $5.00 | $40.00/hour |
+| GPU Type | Cost/GPU/Hour | Example: 4 GPUs | Example: 8 GPUs |
+|----------|---------------|-----------------|-----------------|
+| T4 | $0.59 | $2.36/hour | $4.72/hour |
+| L4 | $0.80 | $3.20/hour | $6.40/hour |
+| A10 | $1.10 | $4.40/hour | $8.80/hour |
+| L40S | $1.95 | $7.80/hour | $15.60/hour |
+| A100-40GB | $2.10 | $8.40/hour | $16.80/hour |
+| A100-80GB | $2.50 | $10.00/hour | $20.00/hour |
+| H100 | $3.95 | $15.80/hour | $31.60/hour |
+| H200 | $4.54 | $18.16/hour | $36.32/hour |
+| B200 | $6.25 | $25.00/hour | $50.00/hour |
 
 ## Troubleshooting
 

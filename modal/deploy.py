@@ -98,11 +98,15 @@ prime_rl_image = (
 )
 
 
+# Get GPU configuration from environment variable (set before modal loads)
+# Default to H100:4 if not specified
+DEFAULT_GPU_CONFIG = os.environ.get("MODAL_GPU_CONFIG", "H100:4")
+
 @app.function(
     image=prime_rl_image,
-    gpu="H100:4",  # ⚠️ EDIT THIS LINE to change GPU count/type (e.g., "H100:2", "A100-40GB:8")
-    cpu=16.0,  # 16 CPU cores
-    memory=65536,  # 64GB RAM
+    gpu=DEFAULT_GPU_CONFIG,  # This is read at module import time
+    cpu=16.0,
+    memory=65536,
     volumes={
         "/outputs": outputs_volume,
         "/checkpoints": checkpoint_volume,
@@ -112,8 +116,8 @@ prime_rl_image = (
         modal.Secret.from_name("wandb"),
         modal.Secret.from_name("huggingface"),
     ],
-    timeout=86400,  # 24 hour timeout
-    enable_memory_snapshot=True,  # Dramatically improves cold start (2-5min → 10-30sec)
+    timeout=86400,
+    enable_memory_snapshot=True,
 )
 def run_command(
     command: str,
@@ -186,8 +190,6 @@ def run_command(
 def main(
     command: Optional[str] = None,
     experiment_name: Optional[str] = None,
-    gpu_type: str = "A100-40GB",
-    gpu_count: int = 2,
     download_results: bool = True,
 ):
     """
@@ -197,13 +199,20 @@ def main(
         command: Command to run (e.g., "uv run rl --trainer @ configs/...")
                  If not provided, uses default reverse_text example
         experiment_name: Name for this experiment (auto-generated if not provided)
-        gpu_type: GPU type (T4, L4, A10G, A100-40GB, A100-80GB, H100)
-        gpu_count: Total number of GPUs to use
         download_results: Whether to show download instructions after completion
+
+    GPU Configuration:
+        Set the MODAL_GPU_CONFIG environment variable to change GPU allocation.
+        Default: H100:4
+
+        MODAL_GPU_CONFIG="A100-80GB:8" modal run modal/deploy.py
 
     Examples:
         # Run with default command (reverse_text example)
         modal run modal/deploy.py
+
+        # Run with different GPU configuration
+        MODAL_GPU_CONFIG="A100-80GB:4" modal run modal/deploy.py
 
         # Run custom RL training command
         modal run modal/deploy.py --command "uv run rl --trainer @ configs/reverse_text/rl/train.toml --orchestrator @ configs/reverse_text/rl/orch.toml --inference @ configs/reverse_text/rl/infer.toml --trainer-gpu-ids 0 --inference-gpu-ids 1"
@@ -214,12 +223,10 @@ def main(
         # Run evaluation
         modal run modal/deploy.py --command "uv run eval --model.name my-model --environment-ids math500"
 
-        # Custom experiment name and GPU config
-        modal run modal/deploy.py \
+        # Custom experiment name with GPU config
+        MODAL_GPU_CONFIG="H100:8" modal run modal/deploy.py \
             --command "uv run rl --trainer @ configs/hendrycks_math/1b/train.toml --orchestrator @ configs/hendrycks_math/1b/orch.toml --inference @ configs/hendrycks_math/1b/infer.toml" \
-            --experiment-name "math-experiment-1" \
-            --gpu-type "A100-80GB" \
-            --gpu-count 8
+            --experiment-name "math-experiment-1"
     """
     import time
 
@@ -252,39 +259,44 @@ def main(
             prefix = "experiment"
         experiment_name = f"{prefix}-{timestamp}"
 
+    # Parse the actual GPU config being used
+    actual_gpu_config = DEFAULT_GPU_CONFIG
+
+    # Try to parse GPU type and count from config (e.g., "A100-80GB:4" -> "A100-80GB", 4)
+    if ":" in actual_gpu_config:
+        gpu_type_actual, gpu_count_str = actual_gpu_config.rsplit(":", 1)
+        try:
+            gpu_count_actual = int(gpu_count_str)
+        except ValueError:
+            gpu_type_actual = actual_gpu_config
+            gpu_count_actual = 1
+    else:
+        gpu_type_actual = actual_gpu_config
+        gpu_count_actual = 1
+
     print(f"\n🚀 Modal Deployment: prime-rl")
     print(f"="*60)
     print(f"Experiment: {experiment_name}")
     print(f"Configuration:")
     print(f"  - Command: {command}")
-    print(f"  - GPU type: {gpu_type}")
-    print(f"  - Total GPUs: {gpu_count}")
+    print(f"  - GPU config: {actual_gpu_config}")
 
-    # Validate GPU type
-    valid_gpu_types = ["T4", "L4", "A10G", "A100-40GB", "A100-80GB", "H100", "H200", "B200"]
-    if not any(gpu_type.startswith(valid) for valid in valid_gpu_types):
-        print(f"Warning: Unknown GPU type {gpu_type}, using A100-40GB")
-        gpu_type = "A100-40GB"
-
-    # Build GPU spec dynamically
-    gpu_spec = f"{gpu_type}:{gpu_count}"
-
-    # Cost estimation (approximate, varies by GPU type and region)
+    # Cost estimation (Modal pricing as of 2025)
     cost_per_gpu = {
-        "T4": 0.50,
-        "L4": 1.00,
-        "A10G": 1.50,
-        "A100-40GB": 3.70,
-        "A100-80GB": 5.00,
-        "H100": 4.00,
-        "H200": 5.00,
-        "B200": 6.00,
+        "T4": 0.59,
+        "L4": 0.80,
+        "A10": 1.10,
+        "L40S": 1.95,
+        "A100-40GB": 2.10,
+        "A100-80GB": 2.50,
+        "H100": 3.95,
+        "H200": 4.54,
+        "B200": 6.25,
     }
-    gpu_cost = next((v for k, v in cost_per_gpu.items() if gpu_type.startswith(k)), 3.70)
+    gpu_cost = next((v for k, v in cost_per_gpu.items() if gpu_type_actual.startswith(k)), 2.10)
 
-    print(f"  - GPU spec: {gpu_spec}")
     print(f"  - Estimated time: varies by experiment")
-    print(f"  - Estimated cost: ~${gpu_count * gpu_cost:.2f}/hour ({gpu_type} pricing)")
+    print(f"  - Estimated cost: ~${gpu_count_actual * gpu_cost:.2f}/hour ({gpu_type_actual} pricing)")
 
     print(f"\n✅  This script runs your local code on Modal.")
     print(f"  - Your project directory is mounted into the container.")
@@ -295,8 +307,11 @@ def main(
     # Run training
     print("\n📦 Starting command on Modal...")
     print("(This may take a few minutes to build the container on first run)")
-    print(f"⚠️  Note: GPU config is set in deploy.py line 106 (currently hardcoded)")
-    print(f"   Requested: {gpu_spec}, but using whatever is in the decorator")
+    if os.environ.get("MODAL_GPU_CONFIG"):
+        print(f"✅ Using custom GPU config from MODAL_GPU_CONFIG: {actual_gpu_config}")
+    else:
+        print(f"ℹ️  Using default GPU config: {actual_gpu_config}")
+        print(f"   To change, set: MODAL_GPU_CONFIG='A100-80GB:4' modal run modal/deploy.py")
 
     # Run the command
     result = run_command.remote(
