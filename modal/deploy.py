@@ -82,6 +82,7 @@ prime_rl_image = (
     .add_local_file(project_root / "README.md", "/app/README.md", copy=True)
     .add_local_dir(project_root / "src", "/app/src", copy=True)
     .add_local_dir(project_root / "configs", "/app/configs", copy=True)
+    .add_local_dir(project_root / "examples", "/app/examples", copy=True)
     .run_function(build_dependencies)
     # Set the virtual environment's Python as the default (must come before other env vars)
     .env({"PATH": "/app/.venv/bin:$PATH"})
@@ -95,6 +96,7 @@ prime_rl_image = (
     # This must be LAST to avoid triggering rebuilds on code changes
     .add_local_dir(project_root / "src", "/app/src")
     .add_local_dir(project_root / "configs", "/app/configs")
+    .add_local_dir(project_root / "examples", "/app/examples")
 )
 
 

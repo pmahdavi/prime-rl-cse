@@ -2,85 +2,53 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Overview
+## Project Overview
 
-PRIME-RL is a framework for large-scale asynchronous reinforcement learning training. It uses a disaggregated architecture with three main components that can be scaled independently:
+PRIME-RL is a framework for large-scale asynchronous reinforcement learning (RL) training designed to scale from single GPUs to 1000+ GPU clusters. It's built for training language models using RL post-training techniques like PPO.
 
-1. **Trainer** (`src/prime_rl/trainer/`): Handles SFT and RL training using PyTorch FSDP2 for distributed training
-2. **Inference Server** (`src/prime_rl/inference/`): vLLM-based inference backend with custom weight update endpoints
-3. **Orchestrator** (`src/prime_rl/orchestrator/`): Lightweight CPU process coordinating data flow between trainer and inference
+## Essential Commands
 
-The framework supports asynchronous off-policy training where inference can run k steps ahead of the trainer (default k=2), enabling continuous operation without idle time.
-
-## Key Commands
-
-### Environment Setup
+### Development Setup
 ```bash
-# Install dependencies (uses uv package manager)
+# Install dependencies using uv package manager
 uv sync && uv sync --all-extras
 
-# Install pre-commit hooks for development
+# Install pre-commit hooks
 uv run pre-commit install
 
 # Validate environment
-uv run python -c "import flash_attn"
+uv run python -c "import flash_attn"  # Check flash-attn installed
 ```
 
 ### Running Training
 
-All commands use the format: `uv run <entrypoint> @ path/to/config.toml`
-
-**SFT Training:**
 ```bash
-# Single GPU
+# Full RL training (requires 2+ GPUs)
+uv run rl \
+  --trainer @ configs/reverse_text/rl/train.toml \
+  --orchestrator @ configs/reverse_text/rl/orch.toml \
+  --inference @ configs/reverse_text/rl/infer.toml
+
+# SFT training (requires 1 GPU)
 uv run sft @ configs/debug/sft/train.toml
 
-# Multi-GPU (8 GPUs example)
-uv run torchrun --nproc-per-node 8 src/prime_rl/trainer/sft/train.py @ configs/debug/sft/train.toml
-
-# Multi-node (2 nodes example)
-# On head node (rank 0):
-uv run torchrun --nnodes 2 --node-rank 0 --rdzv-endpoint=$MASTER_ADDR:$MASTER_PORT --nproc-per-node 8 src/prime_rl/trainer/sft/train.py @ config.toml
-
-# On worker node (rank 1):
-uv run torchrun --nnodes 2 --node-rank 1 --rdzv-endpoint=$MASTER_ADDR:$MASTER_PORT --nproc-per-node 8 src/prime_rl/trainer/sft/train.py @ config.toml
-```
-
-**RL Training:**
-```bash
-# Single-node (starts all 3 components)
-uv run rl \
-  --trainer @ configs/debug/rl/train.toml \
-  --orchestrator @ configs/debug/orch.toml \
-  --inference @ configs/debug/infer.toml
-
-# Manual component startup (for multi-node)
-uv run inference @ configs/debug/infer.toml
-uv run orchestrator @ configs/debug/orch.toml
+# RL training only (requires 1 GPU, assumes inference server running separately)
 uv run trainer @ configs/debug/rl/train.toml
 
-# Specify GPU allocation
-uv run rl \
-  --trainer @ config.toml \
-  --orchestrator @ config.toml \
-  --inference @ config.toml \
-  --inference-gpu-ids 0,1,2,3,4,5 \
-  --trainer-gpu-ids 6,7
-```
+# Inference server (requires 1 GPU)
+uv run inference @ configs/debug/infer.toml
 
-**Evaluation:**
-```bash
-# Evaluate checkpoint
-uv run eval \
-  --model.name <model-name> \
-  --environment-ids math500,aime2025 \
-  --weights-dir outputs/weights \
-  --steps 10,20,30
+# Orchestrator (no GPU required, connects to running inference server)
+uv run orchestrator @ configs/debug/orch.toml
+
+# Evaluation
+uv run eval @ configs/debug/eval.toml
 ```
 
 ### Testing
+
 ```bash
-# Run all tests
+# Full test suite
 uv run pytest -v
 
 # Unit tests only
@@ -89,114 +57,257 @@ uv run pytest tests/unit -v
 # Integration tests only
 uv run pytest tests/integration -v
 
-# CPU-only tests (exclude GPU tests)
+# CPU-only tests (skip GPU tests)
 uv run pytest -v -m "not gpu"
 
-# Run specific test
-uv run pytest tests/unit/test_file.py::test_function -v
+# Fast tests only (skip slow tests)
+uv run pytest -v -m "not slow"
 ```
 
-### Code Quality
+### Development Utilities
+
 ```bash
-# Run linting (ruff handles both formatting and linting)
-uv run ruff check .
+# View logs in tmux (creates 3-pane layout for trainer/orchestrator/inference)
+bash scripts/tmux.sh
 
-# Auto-fix linting issues
-uv run ruff check --fix .
+# Clean outputs directory
+bash scripts/clean.sh
 
-# Format code
+# Lint and format code
+uv run ruff --fix .
 uv run ruff format .
+```
+
+### Modal Deployment
+
+```bash
+# Run on Modal serverless infrastructure
+modal run modal/deploy.py
+
+# Custom command on Modal
+modal run modal/deploy.py --command "uv run rl --trainer @ configs/..."
+
+# Different GPU configuration (via environment variable)
+MODAL_GPU_CONFIG="H100:8" modal run modal/deploy.py
 ```
 
 ## Architecture
 
-### Configuration System
-Uses `pydantic-settings` with TOML configs. Configuration precedence (highest to lowest):
-1. CLI arguments: `--key.subkey value`
-2. Config files: `@ path/to/config.toml`
-3. Environment variables: `PRIME_KEY__SUBKEY=value`
-4. Default values
+### Core Components
 
-Example: `uv run trainer @ base.toml @ override.toml --model.name Qwen/Qwen3-8B`
+PRIME-RL uses a **decoupled multi-process architecture** with three main components:
 
-### Async Training Architecture
-- Global training step n tags all artifacts
-- Trainer produces policy π_n from rollouts (x_n, y_n)
-- Inference generates rollouts from policy π_{max(0, n-k)} where k=async_level (default 2)
-- Uses AIPO loss objective with importance sampling for off-policy corrections
+1. **Trainer** (`src/prime_rl/trainer/`)
+   - Handles model weight updates using PyTorch FSDP (Fully Sharded Data Parallelism)
+   - Supports both SFT (`sft/`) and RL (`rl/`) training
+   - Consumes training batches from disk (written by orchestrator)
+   - Saves checkpoints and weight-only snapshots for inference server
+   - Entry points: `sft/train.py`, `rl/train.py`
 
-### Module Structure
+2. **Inference Server** (`src/prime_rl/inference/`)
+   - High-performance vLLM-based server for generating model completions
+   - Exposes OpenAI-compatible HTTP API
+   - Supports dynamic weight loading without server restart
+   - Can use tensor parallelism across multiple GPUs
+   - Entry point: `server.py`
+
+3. **Orchestrator** (`src/prime_rl/orchestrator/`)
+   - Coordinates the RL training loop
+   - Samples prompts, requests completions from inference server
+   - Calculates rewards using pluggable environment modules
+   - Computes advantages (GAE) and prepares training batches
+   - Manages on-policy synchronization via async_level
+   - Entry point: `orchestrator.py`
+
+### Data Flow
+
+```
+Orchestrator → (HTTP) → Inference Server → Completions
+     ↓
+  Rewards & Advantages
+     ↓
+Training Batches (saved to disk at outputs/rollouts/step_N/)
+     ↓
+  Trainer reads batches → Updates weights → Saves to outputs/weights/step_N/
+     ↓
+Orchestrator detects new weights → (HTTP) → Tells Inference Server to reload
+```
+
+### Key Design Patterns
+
+- **Process isolation**: Components run as independent processes, enabling independent scaling
+- **File-based data passing**: Large data payloads (training batches, weights) transferred via filesystem
+- **HTTP-based control**: Lightweight commands (generate text, load weights) via HTTP API
+- **Pydantic configuration**: All config is strongly-typed with `BaseSettings` classes using TOML files
+- **Async orchestration**: Orchestrator uses `asyncio` for concurrent I/O operations
+
+### Directory Structure
+
 ```
 src/prime_rl/
-├── trainer/          # FSDP2-based training
-│   ├── rl/          # RL training implementation
-│   ├── sft/         # SFT training implementation
-│   ├── models/      # Custom model implementations
-│   ├── model.py     # Model loading/setup
-│   ├── parallel_dims.py  # Parallelism configuration
-│   └── weights.py   # Weight management
-├── orchestrator/    # Data flow coordination
-│   ├── buffer.py    # Rollout buffering
-│   ├── batch.py     # Batch assembly
-│   └── advantage.py # Advantage computation
-├── inference/       # vLLM inference server
-├── eval/           # Evaluation harness
-└── utils/          # Shared utilities
+├── rl.py                    # Main entrypoint that launches all components
+├── trainer/
+│   ├── sft/                 # Supervised fine-tuning
+│   ├── rl/                  # RL training (PPO)
+│   │   ├── train.py         # Main RL training script
+│   │   ├── loss.py          # PPO loss computation
+│   │   ├── config.py        # RL trainer configuration
+│   │   └── data.py          # Data loading from orchestrator
+│   ├── model.py             # Model setup (FSDP, flash-attn)
+│   ├── ckpt.py              # Checkpoint saving/loading
+│   └── weights.py           # Weight-only checkpoint for inference
+├── inference/
+│   ├── server.py            # vLLM server with dynamic weight loading
+│   └── vllm/                # vLLM integration
+├── orchestrator/
+│   ├── orchestrator.py      # Main orchestration loop
+│   ├── buffer.py            # Prompt buffer management
+│   ├── batch.py             # Batch preparation for trainer
+│   ├── advantage.py         # GAE computation
+│   └── client.py            # HTTP client for inference server
+├── eval/                    # Evaluation scripts
+└── utils/                   # Shared utilities (logging, config, monitoring)
+
+configs/
+├── debug/                   # Fast debug configs (small models, few steps)
+├── reverse_text/            # Example: text reversal task
+└── [other_tasks]/           # Various RL task configurations
 ```
+
+## Important Implementation Details
+
+### Configuration System
+
+- All components use Pydantic `BaseSettings` with TOML config files
+- CLI argument pattern: `uv run <command> @ <config.toml> [--overrides]`
+- Shared configs (model name, output dir, wandb, async_level) propagated from `rl.py` to subprocesses
+- See `src/prime_rl/utils/pydantic_config.py` for config parsing utilities
+
+### GPU Allocation
+
+- The `rl.py` launcher uses `CUDA_VISIBLE_DEVICES` to partition GPUs between components
+- Flags: `--trainer-gpu-ids`, `--inference-gpu-ids`, `--orchestrator-gpu-ids`
+- Example: `--trainer-gpu-ids 0 1 --inference-gpu-ids 2 3` assigns first 2 GPUs to trainer, last 2 to inference
 
 ### Checkpointing
-- Trainer checkpoints: FSDP shards (DCP), optimizer/scheduler state, progress
-- Orchestrator checkpoints: progress counters (step, tokens, samples, problems)
-- Inference: stateless, orchestrator reloads weights on resume
-- Default location: `checkpoints/step_{step}/`
-- Configure with `--ckpt.interval`, `--ckpt.keep`, `--ckpt.resume-step`
+
+- **Full checkpoints** (trainer state, optimizer, scheduler): `outputs/ckpt/step_N/`
+  - Used for resuming training runs
+  - Controlled by `[checkpoint.interval]` and `[checkpoint.resume_step]`
+- **Weight-only checkpoints**: `outputs/weights/step_N/`
+  - Lightweight, used by inference server to update policy
+  - Required for on-policy RL training
+
+### Asynchronous Training
+
+- `async_level` parameter controls staleness of inference policy vs trainer policy
+- `async_level = N` means inference server lags trainer by N steps
+- Higher async_level = faster throughput but less on-policy
+- Orchestrator blocks when it gets too far ahead (`progress.step - ckpt_step > async_level`)
 
 ### Environments
-Uses `verifiers` package for RL tasks. Install environments from the [Environment Hub](https://app.primeintellect.ai/dashboard/environments):
+
+- RL tasks are defined in separate packages based on the `verifiers` framework
+- Installed via `uv run prime env install <env-name>`
+- Examples: `reverse_text`, `wordle`, math reasoning tasks
+- Environment provides: prompt sampling, reward calculation, evaluation metrics
+- Configured in TOML via `[environment]` section
+
+### Monitoring
+
+- W&B integration for metrics, sample rollouts, and training curves
+- Log files written to `outputs/logs/` for each component
+- Use `scripts/tmux.sh` to view all logs simultaneously
+- Key metrics: loss, reward, advantages, throughput (tokens/sec, TFLOPs)
+
+## Common Workflows
+
+### Adding a New RL Environment
+
+1. Create environment package following `verifiers` framework
+2. Install: `uv run prime env install <env-name>`
+3. Create new config TOML in `configs/<env-name>/`
+4. Set `[environment] id = "<env-name>"` in config
+5. Run: `uv run rl --trainer @ configs/<env-name>/train.toml ...`
+
+### Debugging with Persistent Inference Server
+
+To avoid restarting slow-loading inference server during development:
+
 ```bash
-prime env install <owner>/<name>
-# Or local: uv pip install -e path/to/env
+# Terminal 1: Start inference server (runs continuously)
+uv run inference @ configs/reverse_text/rl/infer.toml
+
+# Terminal 2: Run trainer + orchestrator only (omit --inference)
+uv run rl \
+  --trainer @ configs/reverse_text/rl/train.toml \
+  --orchestrator @ configs/reverse_text/rl/orch.toml
 ```
 
-### Multi-Node Networking
-For multi-node setups, configure network interfaces:
+### Modifying Loss Functions
+
+1. Edit loss computation in `src/prime_rl/trainer/rl/loss.py`
+2. Update config schema in `src/prime_rl/trainer/rl/config.py` (e.g., `LossConfig`)
+3. Add new config option to TOML file
+4. Run tests: `uv run pytest tests/unit/trainer/ -v`
+
+### Multi-Node Training
+
+For trainer (using torchrun):
 ```bash
-export GLOO_SOCKET_IFNAME=...
-export NCCL_SOCKET_IFNAME=...
-export MASTER_ADDR=...  # Head node IP
-export MASTER_PORT=...  # Typically 29500
+# On all nodes, set master node address
+export RDZV_ENDPOINT="master-node-ip:29500"
+
+# On each node, run with appropriate node_rank
+uv run torchrun \
+  --nnodes=4 \
+  --node-rank=$NODE_RANK \
+  --rdzv-backend=c10d \
+  --rdzv-endpoint=$RDZV_ENDPOINT \
+  -m prime_rl.trainer.rl.train @ configs/...
 ```
 
-## Project-Specific Patterns
+For inference (using vLLM data parallelism):
+- See detailed instructions in README.md
+- Requires setting `GLOO_SOCKET_IFNAME`, `NCCL_SOCKET_IFNAME`, `DATA_PARALLEL_ADDRESS`
 
-- **Entry points** are defined in `pyproject.toml` under `[project.scripts]`
-- **Config precedence**: Always check if a setting exists in multiple places (top-level RLConfig vs submodule configs)
-- **Shared file system required** for multi-node RL training
-- **Python 3.12** is required (`requires-python = "~=3.12.0"`)
-- **flash-attn** must be built without isolation: `no-build-isolation-package = ["flash-attn"]`
-- Uses `uv` as package manager instead of pip/conda
-- Ruff is configured to ignore F722/F821 for jaxtyping compatibility
+## Code Quality Standards
 
-## Development Workflow
+- **Linting**: `ruff` with F (pyflakes) and I (isort) rules
+- **Line length**: 120 characters
+- **Type hints**: Encouraged, especially for public APIs
+- **Testing**: All new features should have unit tests in `tests/unit/`
+- **Pre-commit hooks**: Automatically run ruff before commits
 
-1. Make code changes
-2. Run `uv run ruff check --fix .` to fix linting issues
-3. Run `uv run pytest tests/unit -v` for quick validation
-4. For GPU-dependent changes, run `uv run pytest -v -m gpu`
-5. Pre-commit hooks will automatically check formatting on commit
+## Package Management
 
-## Common Patterns
+- Uses `uv` as package manager (faster than pip)
+- Dependencies defined in `pyproject.toml`
+- Lock file: `uv.lock` (commit this)
+- Custom indices: PyTorch (test/cu128), PrimeIntellect environments
+- No build isolation for `flash-attn` (set in `[tool.uv]`)
 
-**Adding a new model:**
-- Add model class to `src/prime_rl/trainer/models/`
-- Register in model loading logic in `src/prime_rl/trainer/model.py`
-- Ensure FSDP compatibility
+## Performance Considerations
 
-**Adding a new training objective:**
-- Modify loss computation in `src/prime_rl/trainer/rl/`
-- Update config in `src/prime_rl/trainer/rl/config.py`
+- vLLM uses PagedAttention for high-throughput inference
+- Trainer uses FlashAttention-2 for memory-efficient attention
+- FSDP enables training models larger than single-GPU memory
+- Liger Kernel for optimized ops
+- Benchmark modes available: `--bench` flag on `rl`, `trainer`, or `orchestrator`
 
-**Debugging multi-node issues:**
-- Check `--local-rank-filter 0` is set to see master rank logs only
-- Verify network interfaces with `GLOO_SOCKET_IFNAME` and `NCCL_SOCKET_IFNAME`
-- Ensure shared file system is accessible from all nodes
+## File Naming Conventions
+
+- Config files: `<component>.toml` (e.g., `train.toml`, `infer.toml`, `orch.toml`)
+- Python modules: snake_case
+- Classes: PascalCase
+- Config classes: Suffix with `Config` (e.g., `TrainerConfig`, `LossConfig`)
+
+## Entry Points
+
+Defined in `pyproject.toml [project.scripts]`:
+- `rl`: Main launcher for full RL run
+- `trainer`: RL trainer only
+- `sft`: SFT trainer only
+- `orchestrator`: Orchestrator only
+- `inference`: Inference server only
+- `eval`: Evaluation script
